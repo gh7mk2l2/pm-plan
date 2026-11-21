@@ -259,3 +259,5 @@ LINUX DO Connect 配置：
 - 重置卡：站长生成兑换码（`PMRC-XXXX-XXXX-XXXX-XXXX`，库里只存 SHA-256 哈希）；用户兑换后使用，使用时写入 `usage_resets`，5 小时 / 7 天 / 30 天已用额度全部清零。
 - Ultra：高于 Max 的档位，5 小时额度 $200，7 天 / 30 天不限；升到 Max 后自动进入候补，站长审批通过后生效，永不过期，渠道权限与 Max 相同。
 - 接口：`GET /api/cards`、`POST /api/makeup-cards/{id}/use`、`POST /api/reset-cards/redeem`、`POST /api/reset-cards/{id}/use`；管理：`POST /api/admin/makeup-cards/issue-all`、`POST /api/admin/makeup-cards/issue`、`GET /api/admin/makeup-cards`、`GET /api/admin/reset-codes`、`POST /api/admin/reset-codes`、`POST /api/admin/reset-codes/{id}/revoke`。
+
+## 感谢来自 linux.do 佬友的建议与贡献

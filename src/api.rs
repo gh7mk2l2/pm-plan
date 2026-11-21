@@ -34,6 +34,8 @@ pub fn router() -> Router<AppState> {
         .route("/model-tiers", get(model_tiers_handler))
         .route("/captcha/provider", get(crate::captcha::provider))
         .route("/v1/zcode/contribute", get(crate::zcode::contribute))
+        .route("/notices", get(crate::notices::list_notices))
+        .route("/notices/{id}/read", post(crate::notices::mark_read))
 }
 
 #[derive(Serialize)]

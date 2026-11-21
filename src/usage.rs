@@ -68,6 +68,26 @@ pub async fn quota_usage(pool: &PgPool, user_id: i64) -> Result<QuotaUsage, sqlx
     })
 }
 
+/// 当日零定价模型已用 token（每 Key / 每用户）。零定价以 cost_micro = 0 识别：
+/// 定价为 0 的模型每次调用 cost_micro 都是 0；失败请求 token 为 0，不影响求和。
+pub async fn free_tokens_today(
+    pool: &PgPool,
+    key_id: i64,
+    user_id: i64,
+) -> Result<(i64, i64), sqlx::Error> {
+    let row: (i64, i64) = sqlx::query_as(
+        "SELECT COALESCE(SUM(total_tokens) FILTER (WHERE key_id = $1), 0)::bigint, \
+                COALESCE(SUM(total_tokens) FILTER (WHERE user_id = $2), 0)::bigint \
+         FROM usage_logs \
+         WHERE created_at >= date_trunc('day', now()) AND cost_micro = 0",
+    )
+    .bind(key_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
 pub fn exceeded_window(plan_info: &PlanInfo, usage: &QuotaUsage) -> Option<(QuotaWindow, i64, i64)> {
     if let Some(limit) = plan_info.limits.h5 {
         if usage.h5 >= limit {

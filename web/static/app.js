@@ -400,6 +400,39 @@
       .join("")}</nav>`;
   }
 
+  /* 页脚内容: 登录页与控制台共用同一份, 链接只用站内路由与已有站点 */
+  function footerInner() {
+    return `
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <img src="/static/logo.jpg" alt="PM-Plan">
+          <div>
+            <div class="footer-brand-name">PM-Plan</div>
+            <div class="footer-brand-sub">胖猫也开始卖 Token Plan 了吗。<br>签到养成套餐，按档位调用渠道模型。</div>
+          </div>
+        </div>
+        <div class="footer-col">
+          <h4>产品</h4>
+          <a href="#/">概览</a>
+          <a href="#/keys">API Keys</a>
+          <a href="#/usage">用量</a>
+          <a href="#/models">模型广场</a>
+          <a href="#/plans">套餐</a>
+        </div>
+        <div class="footer-col">
+          <h4>相关站点</h4>
+          <a href="https://plan.pmcat.top" target="_blank" rel="noopener">PM-Plan 首页</a>
+          <a href="https://dygyz.pmcat.top" target="_blank" rel="noopener">PM 节点公益站</a>
+          <a href="https://linux.do" target="_blank" rel="noopener">LINUX DO 社区</a>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>PM-Plan · 胖猫也开始卖 Token Plan 了吗</span>
+        <span>模型权限仅由套餐档位 × 渠道授权决定</span>
+        <span>LINUX DO Connect · 0 级应用</span>
+      </div>`;
+  }
+
   function appShell(content) {
     const me = state.me;
     const adminLink = isAdmin()
@@ -440,10 +473,7 @@
         ${mobileTabs()}
       </header>
       <main class="shell app-page">${content}</main>
-      <footer class="shell footer">
-        <span>PM-Plan · 胖猫也开始卖 Token Plan 了吗</span>
-        <span>模型权限仅由套餐档位 × 渠道授权决定</span>
-      </footer>`;
+      <footer class="shell footer">${footerInner()}</footer>`;
   }
 
   function loadingContent() {
@@ -602,10 +632,7 @@
           </div>
         </section>
 
-        <footer class="footer">
-          <span>PM-Plan · ${esc(boot.app.homepage)}</span>
-          <span>LINUX DO Connect · 0 级应用</span>
-        </footer>
+        <footer class="footer">${footerInner()}</footer>
       </main>`;
     bindAvatarFallbacks();
   }
@@ -854,6 +881,24 @@
     </table></div>`;
   }
 
+  function noticesSection(me) {
+    const notices = (me.notices || []).filter((n) => !n.is_read);
+    if (!notices.length) return "";
+    return `<div style="margin-bottom:16px;display:grid;gap:12px">${notices
+      .map(
+        (n) => `<div class="notice danger" role="alert">
+          ${icon("alert", 16)}
+          <div style="flex:1;min-width:0">
+            <strong>${esc(n.title)}</strong>
+            <div style="white-space:pre-wrap;line-height:1.7;margin-top:4px">${esc(n.body)}</div>
+            <div class="faint" style="font-size:11px;margin-top:6px">${esc(fmtShortDate(n.created_at))}</div>
+          </div>
+          <button type="button" class="btn btn-soft btn-sm" data-action="notice-read" data-id="${n.id}">我知道了</button>
+        </div>`
+      )
+      .join("")}</div>`;
+  }
+
   function renderDashboard(me) {
     const user = me.user;
     const hour = new Date().getHours();
@@ -872,6 +917,7 @@
           <a class="btn btn-soft btn-sm" href="#/keys">${icon("key", 13)}管理 Keys</a>
         </div>
       </div>
+      ${noticesSection(me)}
       <div class="dashboard-grid">
         <div class="stack">
           ${planHero(me)}
@@ -1419,6 +1465,14 @@
   async function loadDashboard() {
     const me = await api("/api/me");
     state.me = me;
+    try {
+      const data = await api("/api/notices");
+      me.notices = data.notices || [];
+      me.unread_notices = data.unread_count || 0;
+    } catch {
+      me.notices = [];
+      me.unread_notices = 0;
+    }
     return me;
   }
 
@@ -1623,6 +1677,7 @@
     } else if (isRootViewer) {
       buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="promote-user" data-id="${user.id}">设为管理员</button>`);
     }
+    buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="send-notice" data-id="${user.id}" data-username="${esc(user.display_name || user.username)}">发通知</button>`);
     buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="issue-makeup-one" data-id="${user.id}">发补签卡</button>`);
     buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="issue-makeup-one-plus" data-id="${user.id}">发 Plus 卡</button>`);
     buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="issue-reset-one" data-id="${user.id}">发重置卡</button>`);
@@ -2371,14 +2426,15 @@
   /* ---------- admin settings ---------- */
 
   async function loadAdminSettings() {
-    const [me, settings, prices, audit] = await Promise.all([
+    const [me, settings, prices, audit, caps] = await Promise.all([
       api("/api/me"),
       api("/api/admin/settings"),
       api("/api/admin/prices"),
       api("/api/admin/audit"),
+      api("/api/admin/free-token-caps"),
     ]);
     state.me = me;
-    return { me, settings, prices: prices.prices || [], audit: audit.audit || [] };
+    return { me, settings, prices: prices.prices || [], audit: audit.audit || [], caps: caps || { default_cap: 1000000000, overrides: [] } };
   }
 
   const AUDIT_LABELS = {
@@ -2406,16 +2462,20 @@
     "ip.release": "解除 IP 封禁",
     "price.save": "保存模型价格",
     "price.delete": "删除模型价格",
+    "key.distinct_ip_alert": "Key 多 IP 告警",
+    "key.distinct_ip_block": "Key 多 IP 限流",
+    "free_token_cap.set": "设置免费模型上限",
+    "free_token_cap.delete": "取消免费模型上限",
   };
 
   function auditLabel(action) {
     return AUDIT_LABELS[action] || action;
   }
 
-  function renderAdminSettings({ settings, prices, audit }) {
+  function renderAdminSettings({ settings, prices, audit, caps }) {
     return `
       ${adminTabs("/admin/settings")}
-      ${adminHeader("站点设置", "注册开关、应用信息、模型价格与审计日志")}
+      ${adminHeader("站点设置", "注册开关、应用信息、模型价格、免费模型上限与审计日志")}
       <div class="overview-grid">
         <div class="card">
           <div class="card-head"><div><div class="card-title">注册开关</div><div class="card-sub">关闭后仅已有账号可登录</div></div><span class="badge ${settings.registration_open ? "badge-success" : "badge-warning"}">${settings.registration_open ? "开放注册" : "关闭注册"}</span></div>
@@ -2472,6 +2532,23 @@
             )
             .join("")}</tbody>
         </table></div>
+      </div>
+      <div class="card mt-24">
+        <div class="card-head"><div><div class="card-title">免费模型日上限</div><div class="card-sub">默认每天 ${Number(caps.default_cap || 0).toLocaleString()} tokens（Key 与用户各算）；单独设置优先于默认值，重启不丢</div></div><span class="badge badge-muted">默认 ${Number(caps.default_cap || 0).toLocaleString()}</span></div>
+        <form id="cap-add-form" class="filters" style="margin-bottom:12px">
+          <select class="input" name="target_type" style="width:110px"><option value="key">指定 Key</option><option value="user">指定用户</option></select>
+          <input class="input" name="target_id" type="number" min="1" step="1" placeholder="Key ID / 用户 ID" required style="width:150px">
+          <input class="input" name="cap_tokens" type="number" min="1" step="1" placeholder="上限 tokens，如 5000000000" required style="min-width:190px">
+          <input class="input" name="note" placeholder="备注（可选）" style="min-width:140px">
+          <button class="btn btn-soft btn-sm" type="submit">保存设置</button>
+        </form>
+        <div class="mini-list">${caps.overrides && caps.overrides.length
+          ? caps.overrides
+              .map(
+                (row) => `<div class="mini-row"><div class="mini-row-main"><strong>${row.key_id ? `Key #${row.key_id}${row.key_prefix ? `（${esc(row.key_prefix)}）` : ""}` : `用户 #${row.user_id}${row.username ? `（${esc(row.username)}）` : ""}`}</strong><span>${row.note ? esc(row.note) + " · " : ""}${fmtShortDate(row.updated_at)}</span></div><span class="mini-row-side" style="display:inline-flex;align-items:center;gap:8px"><span>${Number(row.cap_tokens).toLocaleString()} tokens/天</span><button type="button" class="btn btn-ghost btn-sm" data-action="delete-cap" data-id="${row.id}">删除</button></span></div>`
+              )
+              .join("")
+          : `<div class="faint" style="font-size:12px">暂无单独设置，全部走默认值</div>`}</div>
       </div>`;
   }
 
@@ -2523,6 +2600,32 @@
         toast(error.message, "error");
       }
     });
+    const capForm = document.querySelector("#cap-add-form");
+    capForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(capForm);
+      const targetType = String(data.get("target_type") || "key");
+      const targetId = Math.round(Number(data.get("target_id") || 0));
+      const capTokens = Math.round(Number(data.get("cap_tokens") || 0));
+      if (!targetId || !capTokens || capTokens <= 0) {
+        toast("请填写正确的目标 ID 与上限", "error");
+        return;
+      }
+      try {
+        await api("/api/admin/free-token-caps", {
+          method: "POST",
+          body: {
+            ...(targetType === "user" ? { user_id: targetId } : { key_id: targetId }),
+            cap_tokens: capTokens,
+            note: String(data.get("note") || "").trim(),
+          },
+        });
+        toast("单独上限已保存", "success");
+        render();
+      } catch (error) {
+        toast(error.message, "error");
+      }
+    });
   }
 
   /* ---------- global actions ---------- */
@@ -2535,7 +2638,7 @@
         button.disabled = false;
         return;
       }
-      const result = await api("/api/checkin", { method: "POST", body: { captcha_token: cap.token } });
+      const result = await api("/api/checkin", { method: "POST", body: { captcha_token: cap.token, captcha_provider: cap.provider } });
       const card = document.querySelector(".checkin-card");
       if (card) card.classList.add("success");
       toast(result.message, "success", 4500);
@@ -2547,197 +2650,171 @@
     }
   }
 
-  // 签到人机验证: 滑块拼图 (2026-11-15 起替代 3×3 图片选图)。
-  // 拖动滑块把拼图块放到背景缺口处; 服务端校验落点 + 拖动轨迹 (时长/速度曲线/二维抖动等)。
-  // 诚实定位: 轨迹分析挡不住会录制/生成类人轨迹的攻击者 (研究见 pmplan-slider/research/report.md:
-  // GAN 生成轨迹 99.8%、录制回放 99.4%), 这只是减速带, 真正防刷靠 LinuxDo 登录 + 限流,
-  // 不要在任何地方宣称它能挡住机器人。
-  // 通过后返回 {token: pass_token}; 取消返回 null。
+  // 签到人机验证: 双通道 (hCaptcha 为主, Turnstile 备用), 通过后返回 {token, provider}; 取消返回 null
+  // 关键: 立即弹出弹窗(先 loading), 再异步加载脚本/取通道 —— 避免"只发请求不出弹窗"
+  // hCaptcha 强制验证: 显式 size:"normal" 渲染可见复选框(绝不用隐形模式);
+  // 是否弹题、题目难度由 hCaptcha 后台该 sitekey 的 Behavior(须为 Always Challenge)
+  // 与难度档位决定, 代码里改不了 —— 免费版支持 Always Challenge + Easy/Medium/Difficult/Auto,
+  // 只有 Passive / 99.9% Passive 才是付费版; Pro 试用默认就是 99.9% Passive。
+  let hcaptchaScriptPromise = null;
+  let turnstileScriptPromise = null;
+  function loadHcaptchaScript() {
+    if (window.hcaptcha) return Promise.resolve();
+    if (!hcaptchaScriptPromise) {
+      hcaptchaScriptPromise = new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://js.hcaptcha.com/1/api.js?render=explicit&hl=zh-CN";
+        s.async = true;
+        s.defer = true;
+        s.onload = () => resolve();
+        s.onerror = () => {
+          hcaptchaScriptPromise = null;
+          reject(new Error("验证组件加载失败，请检查网络后重试"));
+        };
+        document.head.appendChild(s);
+      });
+    }
+    return hcaptchaScriptPromise;
+  }
+  function loadTurnstileScript() {
+    if (window.turnstile) return Promise.resolve();
+    if (!turnstileScriptPromise) {
+      turnstileScriptPromise = new Promise((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+        s.async = true;
+        s.defer = true;
+        s.onload = () => resolve();
+        s.onerror = () => {
+          turnstileScriptPromise = null;
+          reject(new Error("备用验证组件加载失败，请检查网络后重试"));
+        };
+        document.head.appendChild(s);
+      });
+    }
+    return turnstileScriptPromise;
+  }
+  // 每次验证都现取当前通道(通道可能刚切换过, 不缓存); 返回 {provider, sitekey, fallback}
+  async function getCaptchaProvider() {
+    const data = await api("/api/captcha/provider");
+    if (!data || !data.provider || !data.sitekey) throw new Error("人机验证未配置");
+    return data;
+  }
   function runCheckinCaptcha() {
     return new Promise((resolve) => {
       let done = false;
+      let widgetId = null;
+      let activeProvider = null;
       const finish = (val) => { if (!done) { done = true; resolve(val); } };
-      let challenge = null; // {token, bg, piece, piece_w, piece_h, canvas_w, canvas_h, gap_y, k}
-      let shownAt = 0;
 
       openModal({
         title: "签到人机验证",
-        subtitle: "请拖动滑块，把拼图放到缺口处",
+        subtitle: "请完成下方验证，通过后自动继续",
         wide: true,
         body: `
-          <div id="slider-wrap" style="padding:4px 0 2px">
-            <div class="slider-loading" id="slider-loading">${icon("loader", 20)}<span>正在出题…</span></div>
+          <div class="captcha-widget-wrap" id="captcha-widget-wrap" style="display:flex;justify-content:center;padding:8px 0 2px;min-height:78px">
+            <div class="captcha-loading" id="captcha-loading">${icon("loader", 20)}<span>正在加载验证…</span></div>
           </div>
-          <div id="slider-tip" class="muted" style="margin-top:8px;font-size:12px;min-height:16px;text-align:center"></div>`,
+          <div id="captcha-widget-tip" class="muted" style="margin-top:8px;font-size:12px;min-height:16px;text-align:center"></div>`,
         onMount: function () {
-          const wrap = document.getElementById("slider-wrap");
-          const tip = document.getElementById("slider-tip");
+          const wrap = document.getElementById("captcha-widget-wrap");
+          const loading = document.getElementById("captcha-loading");
+          const tip = document.getElementById("captcha-widget-tip");
+          const theme = ui.theme === "dark" ? "dark" : "light";
           const showError = (msg) => {
-            if (wrap) wrap.innerHTML = `<div class="muted" style="text-align:center;padding:20px 0">${esc(msg)}</div>`;
+            if (loading) loading.outerHTML = `<div class="muted" style="text-align:center;padding:20px 0">${esc(msg)}</div>`;
             if (tip) tip.textContent = "请关闭后重试，或稍后再试";
           };
-          const render = () => {
-            if (!challenge || done) return;
-            const ch = challenge;
-            wrap.innerHTML = `
-              <div class="slider-board" id="slider-board">
-                <img class="slider-bg" src="${ch.bg}" alt="拼图背景" draggable="false">
-                <img class="slider-piece" id="slider-piece" src="${ch.piece}" alt="拼图块" draggable="false">
-              </div>
-              <div class="slider-track" id="slider-track">
-                <div class="slider-track-fill" id="slider-fill"></div>
-                <div class="slider-handle" id="slider-handle" role="slider" tabindex="0"
-                     aria-label="拖动滑块" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">${icon("move", 18)}</div>
-              </div>
-              <div class="slider-actions">
-                <button type="button" class="btn btn-ghost btn-sm" id="slider-refresh">${icon("refresh", 14)} 换一题</button>
-              </div>`;
-            const board = document.getElementById("slider-board");
-            const piece = document.getElementById("slider-piece");
-            const track = document.getElementById("slider-track");
-            const fill = document.getElementById("slider-fill");
-            const handle = document.getElementById("slider-handle");
-            // 画布坐标 (320×200) 与显示尺寸的换算: 前端上报的 offset 与轨迹点一律换算成画布坐标,
-            // 服务端按画布坐标校验 (gap_x / k, 容差 ±5 px)。
-            const scale = () => 320 / board.clientWidth;
-            const placePiece = () => {
-              const s = scale();
-              piece.style.width = `${ch.piece_w / s}px`;
-              piece.style.height = `${ch.piece_h / s}px`;
-              piece.style.top = `${ch.gap_y / s}px`;
-            };
-            placePiece();
-            let dxCss = 0;          // 按钮在轨道上的 CSS 位移
-            let dragging = false;
-            let grabOffset = 0;     // 按下时指针相对手柄左缘的距离, 防止手柄跳变
-            let dragStart = 0;
-            let startDelayMs = 0;
-            let pointerType = "mouse";
-            let points = [];
-            const maxDxCss = () => Math.max(0, track.clientWidth - handle.offsetWidth);
-            const applyDx = (next) => {
-              dxCss = Math.max(0, Math.min(maxDxCss(), next));
-              handle.style.left = `${dxCss}px`;
-              fill.style.width = `${dxCss + handle.offsetWidth / 2}px`;
-              piece.style.left = `${dxCss * ch.k}px`;
-              handle.setAttribute("aria-valuenow", String(Math.round((dxCss / Math.max(1, maxDxCss())) * 100)));
-            };
-            const recordPoint = (clientX, clientY) => {
-              if (points.length >= 300) return;
-              const s = scale();
-              const boardRect = board.getBoundingClientRect();
-              points.push({
-                x: Math.round(dxCss * s * 100) / 100,
-                y: Math.round((clientY - boardRect.top) * s * 100) / 100,
-                t: Math.round(performance.now() - dragStart),
-              });
-            };
-            handle.addEventListener("pointerdown", (e) => {
-              if (done) return;
-              e.preventDefault();
-              dragging = true;
-              pointerType = e.pointerType || "mouse";
-              dragStart = performance.now();
-              startDelayMs = Math.max(0, Math.round(dragStart - shownAt));
-              points = [{ x: Math.round(dxCss * scale() * 100) / 100, y: 0, t: 0 }];
-              grabOffset = e.clientX - handle.getBoundingClientRect().left;
-              handle.setPointerCapture(e.pointerId);
-            });
-            handle.addEventListener("pointermove", (e) => {
-              if (!dragging || done) return;
-              const trackRect = track.getBoundingClientRect();
-              applyDx(e.clientX - grabOffset - trackRect.left);
-              recordPoint(e.clientX, e.clientY);
-            });
-            const finishDrag = async () => {
-              if (!dragging || done) return;
-              dragging = false;
-              // 释放时补一个终点：轨迹的最后一个点就是松手时的按钮位置，
-              // 让“拖动时长/尾段减速”等特征按真实的释放时刻算。
-              if (points.length > 0) {
-                const s = scale();
-                const last = points[points.length - 1];
-                points.push({
-                  x: Math.round(dxCss * s * 100) / 100,
-                  y: last.y,
-                  t: Math.round(performance.now() - dragStart),
+          const resetWidget = () => {
+            try {
+              if (activeProvider === "hcaptcha" && window.hcaptcha) window.hcaptcha.reset(widgetId);
+              else if (activeProvider === "turnstile" && window.turnstile) window.turnstile.reset(widgetId);
+            } catch (e) { /* ignore */ }
+          };
+          // 渲染指定通道; true=控件已就绪, false=加载/渲染失败(调用方可切备用通道)
+          const renderChannel = async (channel) => {
+            if (done) return false;
+            try {
+              if (channel.provider === "turnstile") {
+                await loadTurnstileScript();
+                if (!window.turnstile || done) return false;
+              } else {
+                await loadHcaptchaScript();
+                if (!window.hcaptcha || done) return false;
+              }
+            } catch (e) {
+              return false;
+            }
+            if (loading) loading.remove();
+            wrap.innerHTML = "";
+            activeProvider = channel.provider;
+            try {
+              if (channel.provider === "turnstile") {
+                // Turnstile 显式渲染(不用 .cf-turnstile 自动渲染, 避免 SPA 弹窗里重复渲染);
+                // action 须为 checkin, 后端 siteverify 会校验 action 与 hostname
+                widgetId = window.turnstile.render(wrap, {
+                  sitekey: channel.sitekey,
+                  action: "checkin",
+                  theme,
+                  callback: (token) => {
+                    if (token) {
+                      const p = activeProvider;
+                      try { window.turnstile.reset(widgetId); } catch (e) { /* ignore */ }
+                      closeModal();
+                      finish({ token, provider: p });
+                    }
+                  },
+                  "expired-callback": () => {
+                    if (tip) tip.textContent = "验证已过期，请重新验证";
+                    resetWidget();
+                  },
+                  "error-callback": () => {
+                    if (tip) tip.textContent = "验证加载失败，请关闭后重试";
+                  },
+                });
+              } else {
+                widgetId = window.hcaptcha.render(wrap, {
+                  sitekey: channel.sitekey,
+                  theme,
+                  size: "normal", // 可见复选框(强制验证); 难度与是否弹题由 hCaptcha 后台决定
+                  callback: (token) => {
+                    if (token) {
+                      closeModal();
+                      finish({ token, provider: "hcaptcha" });
+                    }
+                  },
+                  "expired-callback": () => {
+                    if (tip) tip.textContent = "验证已过期，请重新验证";
+                    resetWidget();
+                  },
+                  "error-callback": () => {
+                    if (tip) tip.textContent = "验证加载失败，请关闭后重试";
+                  },
                 });
               }
-              await submit();
-            };
-            handle.addEventListener("pointerup", finishDrag);
-            handle.addEventListener("pointercancel", () => { dragging = false; });
-            // 键盘操作 (无障碍): 方向键每次挪 2 CSS px, 回车提交; 服务端对 keyboard 只验落点不评轨迹。
-            handle.addEventListener("keydown", (e) => {
-              if (done) return;
-              if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
-                e.preventDefault();
-                if (!dragStart) {
-                  dragStart = performance.now();
-                  startDelayMs = Math.max(0, Math.round(dragStart - shownAt));
-                  pointerType = "keyboard";
-                }
-                applyDx(dxCss + (e.key === "ArrowRight" ? 2 : -2));
-              } else if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                if (!dragStart) {
-                  dragStart = performance.now();
-                  startDelayMs = Math.max(0, Math.round(dragStart - shownAt));
-                  pointerType = "keyboard";
-                }
-                submit();
-              }
-            });
-            document.getElementById("slider-refresh")?.addEventListener("click", () => loadChallenge());
-            const submit = async () => {
-              if (!challenge || done) return;
-              const body = {
-                token: challenge.token,
-                // 按钮位移换算成画布坐标; 服务端期望值 = gap_x / k。
-                offset: Math.round(dxCss * scale() * 100) / 100,
-                points,
-                start_delay_ms: startDelayMs,
-                pointer_type: pointerType,
-              };
-              if (tip) tip.textContent = "正在验证…";
-              try {
-                const data = await api("/api/slider/verify", { method: "POST", body });
-                if (done) return;
-                if (data && data.ok && data.pass_token) {
-                  closeModal();
-                  finish({ token: data.pass_token });
-                } else if (data && data.challenge) {
-                  if (tip) tip.textContent = data.message || "验证未通过，已换一题";
-                  challenge = data.challenge;
-                  shownAt = performance.now();
-                  render();
-                } else {
-                  throw new Error("验证失败，请重试");
-                }
-              } catch (e) {
-                if (done) return;
-                // token 过期/失效、限流等：提示后重新出一题。
-                if (tip) tip.textContent = e.message || "验证失败，请重新验证";
-                loadChallenge();
-              }
-            };
-          };
-          const loadChallenge = async () => {
-            if (done) return;
-            if (tip) tip.textContent = "";
-            wrap.innerHTML = `<div class="slider-loading">${icon("loader", 20)}<span>正在出题…</span></div>`;
-            try {
-              const data = await api("/api/slider/challenge");
-              if (done) return;
-              if (!data || !data.token || !data.bg || !data.piece) throw new Error("出题失败，请重试");
-              challenge = data;
-              shownAt = performance.now();
-              render();
             } catch (e) {
-              if (!done) showError(e.message || "出题失败，请重试");
+              return false;
             }
+            return true;
           };
-          loadChallenge();
+          (async () => {
+            try {
+              const info = await getCaptchaProvider();
+              const ok = await renderChannel({ provider: info.provider, sitekey: info.sitekey });
+              if (done) return;
+              if (!ok && info.fallback) {
+                // 主通道脚本加载/渲染失败(例如 hCaptcha 被拦截或额度用尽导致控件不可用):
+                // 就地切到备用通道, 本次验证走备用通道, 后端按 token 实际通道校验
+                if (tip) tip.textContent = "主验证加载失败，已切换到备用验证";
+                const ok2 = await renderChannel(info.fallback);
+                if (!ok2 && !done) showError("验证组件加载失败，请检查网络后重试");
+              } else if (!ok) {
+                showError("验证组件加载失败，请检查网络后重试");
+              }
+            } catch (e) {
+              showError(e.message || "验证加载失败，请重试");
+            }
+          })();
         },
       });
       // 关闭弹窗时若无结果, resolve(null)
@@ -2748,6 +2825,32 @@
         }
       });
       obs.observe(modalRoot, { childList: true });
+    });
+  }
+
+  function openSendNoticeModal(userId, username) {
+    openModal({
+      title: `给 ${username} 发站内通知`,
+      subtitle: "用户下次登录后会在首页顶部看到这条通知。",
+      body: `<div class="faint" style="font-size:12px;margin-bottom:6px">标题</div>
+        <input class="input" id="notice-title" maxlength="100" value="API Key 使用异常警告" style="width:100%">
+        <div class="faint" style="font-size:12px;margin:12px 0 6px">内容</div>
+        <textarea class="input" id="notice-body" rows="6" style="width:100%">你的 API Key 近期出现异常使用（多个不同 IP 高频调用），涉嫌分发或共享给他人使用。请立即停止分发/共享行为，否则将吊销 Key、封禁账号。</textarea>`,
+      footer: `<button type="button" class="btn btn-ghost" data-action="close-modal">取消</button>
+        <button type="button" class="btn btn-primary" id="notice-send-btn">发送</button>`,
+      onMount(root) {
+        root.querySelector("#notice-send-btn").addEventListener("click", async () => {
+          const title = root.querySelector("#notice-title").value.trim();
+          const body = root.querySelector("#notice-body").value.trim();
+          if (!title || !body) {
+            toast("标题和内容不能为空", "error");
+            return;
+          }
+          await api("/api/admin/notices", { method: "POST", body: { user_id: userId, title, body, kind: "warning" } });
+          closeModal();
+          toast("站内通知已发送", "success");
+        });
+      },
     });
   }
 
@@ -2945,6 +3048,20 @@
     });
   }
 
+  async function handleDeleteCap(id) {
+    confirmModal({
+      title: "取消单独上限",
+      message: "确定删除这条单独上限设置吗？该 Key / 用户将恢复默认日上限。",
+      confirmText: "删除",
+      danger: true,
+      async onConfirm() {
+        await api(`/api/admin/free-token-caps/${id}`, { method: "DELETE" });
+        toast("单独上限已取消", "success");
+        render();
+      },
+    });
+  }
+
   document.addEventListener("click", async (event) => {
     const target = event.target.closest("[data-action]");
     if (!target) return;
@@ -2984,7 +3101,7 @@
             }
             const result = await api(`/api/makeup-cards/${cardId}/use`, {
               method: "POST",
-              body: { date, captcha_token: cap.token },
+              body: { date, captcha_token: cap.token, captcha_provider: cap.provider },
             });
             toast(result.message, "success", 4500);
             await render();
@@ -3011,7 +3128,7 @@
             }
             const result = await api(`/api/makeup-cards/${cardId}/use`, {
               method: "POST",
-              body: { date, captcha_token: cap.token },
+              body: { date, captcha_token: cap.token, captcha_provider: cap.provider },
             });
             toast(result.message, "success", 4500);
             await render();
@@ -3244,6 +3361,16 @@
         case "ban-user":
           handleBan(Number(target.dataset.id), target.dataset.banned === "1");
           break;
+        case "send-notice":
+          openSendNoticeModal(Number(target.dataset.id), target.dataset.username || `#${target.dataset.id}`);
+          break;
+        case "notice-read": {
+          const id = Number(target.dataset.id);
+          await api(`/api/notices/${id}/read`, { method: "POST", body: {} });
+          toast("已标记为已读", "success");
+          await render();
+          break;
+        }
         case "grant-plan": {
           const id = Number(target.dataset.id);
           const plan = target.dataset.plan;
@@ -3350,6 +3477,9 @@
           break;
         case "delete-price":
           await handleDeletePrice(target.dataset.model);
+          break;
+        case "delete-cap":
+          await handleDeleteCap(Number(target.dataset.id));
           break;
         default:
           break;

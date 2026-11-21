@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::crypto::Crypto;
 use sqlx::PgPool;
 use std::sync::Arc;
+use crate::distguard::DistGuard;
 use crate::ipban::IpGuard;
 
 #[derive(Clone)]
@@ -11,6 +12,8 @@ pub struct AppState {
     pub http: reqwest::Client,
     pub crypto: Arc<Crypto>,
     pub ip_guard: Arc<IpGuard>,
+    /// 反分发：单 Key 24h 不同 IP 统计 + 免费模型每日 token 上限。
+    pub dist_guard: Arc<DistGuard>,
     /// Client without a User-Agent, used for magpie calls and hCaptcha siteverify
     /// (matches the production binary's outgoing requests).
     pub plain_http: reqwest::Client,
@@ -36,6 +39,7 @@ impl AppState {
             http,
             crypto: Arc::new(crypto),
             ip_guard: Arc::new(IpGuard::from_env()),
+            dist_guard: Arc::new(DistGuard::from_env()),
             plain_http: reqwest::Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .timeout(std::time::Duration::from_secs(30))

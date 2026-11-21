@@ -108,7 +108,7 @@ pub async fn handle_proxy(
     let query = uri.query().unwrap_or("").to_string();
 
     let mut rec = UsageRecord::new(&request_id);
-    rec.client_ip = client_ip;
+    rec.client_ip = client_ip.clone();
     rec.is_stream = false;
 
     let auth = match authenticate_key(&state, &headers).await {
@@ -136,6 +136,55 @@ pub async fn handle_proxy(
         .bind(auth.key.id)
         .execute(&state.pool)
         .await;
+
+    // 反分发 Step 1：单 Key 24 小时内不同 IP 数统计。>10 写审计告警，
+    // >20 返回 429（旧 IP 滑出窗口后自动恢复，不自动吊销 Key）。
+    if !client_ip.is_empty() {
+        let (decision, alert) = state
+            .dist_guard
+            .observe_key(&state.pool, auth.key.id, &client_ip)
+            .await;
+        if let Some(alert) = alert {
+            let action = if alert.level == crate::distguard::ALERT_LEVEL_BLOCK {
+                "key.distinct_ip_block"
+            } else {
+                "key.distinct_ip_alert"
+            };
+            crate::admin::write_audit(
+                &state.pool,
+                None,
+                action,
+                "api_key",
+                &auth.key.id.to_string(),
+                json!({
+                    "user_id": auth.user.id,
+                    "distinct_ips": alert.distinct_ips,
+                    "window_hours": 24,
+                    "alert_at": state.dist_guard.alert_at,
+                    "block_at": state.dist_guard.block_at,
+                }),
+            )
+            .await;
+        }
+        if let crate::distguard::DistDecision::Block { distinct_ips } = decision {
+            tracing::warn!(
+                key_id = auth.key.id,
+                user_id = auth.user.id,
+                distinct_ips,
+                "key blocked: too many distinct IPs in 24h"
+            );
+            return deny(
+                &state,
+                rec,
+                StatusCode::TOO_MANY_REQUESTS,
+                "key_distinct_ip_limit",
+                "该 API Key 在 24 小时内已从过多不同 IP 使用，已被临时限流；待旧 IP 滑出窗口后自动恢复，如需处理请联系站长",
+                started,
+                &request_id,
+            )
+            .await;
+        }
+    }
 
     let payload: Value = match serde_json::from_slice(&body) {
         Ok(value @ Value::Object(_)) => value,
@@ -300,6 +349,52 @@ pub async fn handle_proxy(
         return resp;
     }
     let quota_headers = quota_response_headers(&auth.user.plan, &used);
+
+    // Step 4b: 免费模型（零定价）当日 token 上限。定价为 0 的模型不受成本
+    // 额度约束，单 Key / 单用户每天各限生效上限（默认 1,000,000,000，
+    // 环境变量 DIST_FREE_TOKEN_CAP 可调；管理员可对指定 Key/用户单独设，
+    // 见 free_token_cap_overrides 表，Key 单独设置 > 用户单独设置 > 默认值）。
+    if pick.input_micro == 0 && pick.output_micro == 0 {
+        let estimate = usage::estimate_prompt_tokens(&payload);
+        let cap = crate::distguard::effective_free_token_cap(
+            &state.pool,
+            auth.key.id,
+            auth.user.id,
+            state.dist_guard.free_token_cap,
+        )
+        .await;
+        match usage::free_tokens_today(&state.pool, auth.key.id, auth.user.id).await {
+            Ok((used_key, used_user)) => {
+                if state
+                    .dist_guard
+                    .free_token_exceeded(used_key, used_user, estimate, cap)
+                {
+                    tracing::info!(
+                        key_id = auth.key.id,
+                        user_id = auth.user.id,
+                        used_key,
+                        used_user,
+                        cap,
+                        "free model daily token cap exceeded"
+                    );
+                    return deny(
+                        &state,
+                        rec,
+                        StatusCode::TOO_MANY_REQUESTS,
+                        "free_token_daily_cap",
+                        "免费模型当日用量已达上限，请明天再用或使用付费模型",
+                        started,
+                        &request_id,
+                    )
+                    .await;
+                }
+            }
+            Err(err) => {
+                // 查询失败时 fail-open：只记日志，不拦截。
+                tracing::error!(error = %err, "free token cap check failed");
+            }
+        }
+    }
 
     // Step 5: forward to the selected upstream channel.
     let upstream_model = pick

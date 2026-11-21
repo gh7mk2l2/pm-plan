@@ -24,8 +24,8 @@
   --warning-soft: rgba(255, 209, 102, 0.1);
   --success: #68dba7;
   --success-soft: rgba(104, 219, 167, 0.1);
-  --radius: 20px;
-  --radius-md: 14px;
+  --radius: 14px;
+  --radius-md: 12px;
   --radius-sm: 10px;
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
   --shadow-soft: 0 8px 30px rgba(0, 0, 0, 0.25);
@@ -98,6 +98,12 @@ textarea {
 
 button {
   cursor: pointer;
+}
+
+/* 键盘焦点环: 所有可交互元素统一的可见焦点态 */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 img {
@@ -234,7 +240,7 @@ html[data-theme="light"] .grid-overlay {
 .boot-logo {
   width: 82px;
   height: 82px;
-  border-radius: 24px;
+  border-radius: 16px;
   box-shadow: 0 20px 60px rgba(255, 130, 60, 0.28);
   animation: breathe 2.4s ease-in-out infinite;
 }
@@ -268,7 +274,7 @@ html[data-theme="light"] .grid-overlay {
 }
 
 .topbar-inner {
-  height: 70px;
+  height: 64px;
   display: flex;
   align-items: center;
   gap: 22px;
@@ -338,6 +344,7 @@ html[data-theme="light"] .nav-link:hover {
 .nav-link.active {
   color: var(--text);
   background: var(--accent-soft);
+  font-weight: 650;
 }
 
 .nav-link svg {
@@ -503,6 +510,7 @@ html[data-theme="light"] .nav-link:hover {
   line-height: 1.04;
   letter-spacing: -0.045em;
   font-weight: 800;
+  text-wrap: balance;
 }
 
 .gradient-text {
@@ -556,7 +564,7 @@ html[data-theme="light"] .gradient-text {
 .visual-card {
   position: relative;
   border: 1px solid var(--border);
-  border-radius: 26px;
+  border-radius: 18px;
   background: linear-gradient(160deg, rgba(38, 35, 44, 0.95), rgba(18, 17, 22, 0.96));
   box-shadow: var(--shadow);
   padding: 26px;
@@ -693,7 +701,7 @@ html[data-theme="light"] .visual-card {
 /* ---------- plan cards ---------- */
 
 .section {
-  margin-top: 80px;
+  margin-top: 72px;
 }
 
 .section-head {
@@ -708,6 +716,7 @@ html[data-theme="light"] .visual-card {
   margin: 0;
   font-size: clamp(26px, 3vw, 36px);
   letter-spacing: -0.035em;
+  text-wrap: balance;
 }
 
 .section-head p {
@@ -735,6 +744,7 @@ html[data-theme="light"] .visual-card {
 .plan-card:hover {
   transform: translateY(-3px);
   border-color: var(--border-strong);
+  box-shadow: var(--shadow-soft);
 }
 
 .plan-card.featured {
@@ -831,6 +841,13 @@ html[data-theme="light"] .visual-card {
   border-radius: var(--radius);
   background: var(--panel);
   padding: 24px;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.feature:hover {
+  transform: translateY(-3px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-soft);
 }
 
 .feature-icon {
@@ -857,16 +874,77 @@ html[data-theme="light"] .visual-card {
   line-height: 1.65;
 }
 
+/* ---------- footer ---------- */
+
 .footer {
   margin-top: 84px;
-  padding: 30px 0 40px;
+  padding: 36px 0 40px;
   border-top: 1px solid var(--border);
+  color: var(--faint);
+  font-size: 12px;
+}
+
+.footer-grid {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr;
+  gap: 32px;
+  padding-bottom: 28px;
+}
+
+.footer-brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.footer-brand img {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.footer-brand-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.footer-brand-sub {
+  margin-top: 4px;
+  line-height: 1.7;
+}
+
+.footer-col h4 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.footer-col a {
+  display: block;
+  padding: 4px 0;
+  color: var(--muted);
+  transition: color 0.15s ease;
+}
+
+.footer-col a:hover {
+  color: var(--text);
+}
+
+.footer-bottom {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  color: var(--faint);
-  font-size: 12px;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
 }
 
 /* ---------- buttons ---------- */
@@ -1095,6 +1173,7 @@ html[data-theme="light"] .tier-tag.all {
   font-size: clamp(26px, 3.4vw, 36px);
   letter-spacing: -0.04em;
   font-weight: 760;
+  text-wrap: balance;
 }
 
 .page-sub {
@@ -1459,6 +1538,7 @@ html[data-theme="light"] .cal-day {
   font-size: 24px;
   font-weight: 750;
   letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
 
@@ -2713,9 +2793,9 @@ html[data-theme="light"] .textarea {
   .stat-grid-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .footer {
-    flex-direction: column;
-    align-items: flex-start;
+  .footer-grid {
+    grid-template-columns: 1fr;
+    gap: 22px;
   }
   .plan-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2760,7 +2840,7 @@ html[data-theme="light"] .textarea {
   }
   .card {
     padding: 19px;
-    border-radius: 17px;
+    border-radius: 14px;
   }
   .plan-hero-name {
     font-size: 34px;
@@ -2814,7 +2894,7 @@ html[data-theme="light"] .textarea {
   }
   .modal {
     max-height: 92vh;
-    border-radius: 18px;
+    border-radius: 16px;
   }
   .modal-head,
   .modal-body,
@@ -3501,6 +3581,10 @@ html[data-theme="light"] .select option:checked {
   box-shadow: 0 0 0 3px rgba(255, 154, 92, 0.1);
 }
 
+/* 人机验证容器: 居中展示控件(双通道共用) */
+.captcha-widget-wrap {
+  width: 100%;
+}
 
 /* 修复 (2026-11-01): 自定义 display 会覆盖 UA 的 [hidden]{display:none},
    导致模型广场筛选无效。显式声明优先级更高的隐藏规则。 */
@@ -3527,96 +3611,60 @@ html[data-theme="light"] .model-logo.brand-svg {
   background: color-mix(in srgb, var(--brand, var(--accent)) 8%, #fff);
 }
 
-/* 滑块拼图人机验证 (2026-11-15): 替代 3×3 九宫格选图; 样式贴合现有主题 */
-.slider-board {
-  position: relative;
-  width: 100%;
-  max-width: 320px;
-  margin: 0 auto;
-  aspect-ratio: 320 / 200;
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-.slider-bg {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-  pointer-events: none;
-}
-.slider-piece {
-  position: absolute;
-  left: 0;
-  pointer-events: none;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.45));
-}
-.slider-track {
-  position: relative;
-  height: 44px;
-  max-width: 320px;
-  margin: 12px auto 0;
-  border-radius: 22px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  touch-action: none;
-  user-select: none;
-  -webkit-user-select: none;
-}
-.slider-track-fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 0;
-  border-radius: 22px;
-  background: color-mix(in srgb, var(--accent) 25%, transparent);
-  pointer-events: none;
-}
-.slider-handle {
-  position: absolute;
-  left: 0;
-  top: 3px;
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: #241208;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: grab;
-  touch-action: none;
-}
-.slider-handle:active {
-  cursor: grabbing;
-}
-.slider-handle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.slider-actions {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 14px;
-  flex-wrap: wrap;
-}
-.slider-loading {
+/* 签到验证弹窗: 加载态(取 sitekey/脚本期间显示, 避免"只发请求不弹窗"的观感) */
+.captcha-loading {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  min-height: 120px;
+  min-height: 78px;
   color: var(--muted);
   font-size: 13px;
 }
-.slider-loading svg { animation: spinSlow 0.9s linear infinite; color: var(--accent); }
-#slider-tip {
+.captcha-loading svg { animation: spinSlow 0.9s linear infinite; color: var(--accent); }
+/* ============================================================
+   界面抛光 (2026-11-21): 参考 Minimal Gallery / Saaspo / Land-book
+   的克制做法 —— 卡片组依次入场、移动端 CTA 纵向铺满、页脚单列。
+   只做视觉层, 不动任何功能与文案。入场动效仅在允许动效时生效。
+   ============================================================ */
+
+@media (prefers-reduced-motion: no-preference) {
+  .plan-grid .plan-card,
+  .feature-grid .feature {
+    animation: fadeUp 0.5s var(--ease-out) both;
+  }
+  .plan-grid .plan-card:nth-child(2),
+  .feature-grid .feature:nth-child(2) {
+    animation-delay: 0.05s;
+  }
+  .plan-grid .plan-card:nth-child(3),
+  .feature-grid .feature:nth-child(3) {
+    animation-delay: 0.1s;
+  }
+  .plan-grid .plan-card:nth-child(4) {
+    animation-delay: 0.15s;
+  }
+  .plan-grid .plan-card:nth-child(5) {
+    animation-delay: 0.2s;
+  }
+  .plan-grid .plan-card:nth-child(n + 6) {
+    animation-delay: 0.25s;
+  }
+}
+
+@media (max-width: 640px) {
+  /* 移动端 CTA 纵向铺满, 一指一个按钮, 不挤在一行 */
+  .hero-cta {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .hero-cta .btn {
+    justify-content: center;
+  }
+}
+
+/* 验证失败/过期时的提示更醒目 */
+#captcha-widget-tip {
   text-align: center;
   min-height: 18px;
   transition: color 0.2s ease;

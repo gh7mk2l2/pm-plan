@@ -8,7 +8,7 @@ use crate::state::AppState;
 use crate::util::{is_valid_tier, truncate_chars};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -56,11 +56,14 @@ pub fn router() -> Router<AppState> {
         .route("/logs", get(list_logs))
         .route("/audit", get(list_audit))
         .route("/settings", get(get_settings).patch(update_settings))
+        .route("/notices", post(crate::notices::send_notice))
         .route("/prices", get(list_prices).post(create_price))
         .route(
             "/prices/{model}",
             put(update_price).delete(delete_price),
         )
+        .route("/free-token-caps", get(list_free_token_caps).post(set_free_token_cap))
+        .route("/free-token-caps/{id}", delete(delete_free_token_cap))
 }
 
 #[derive(Serialize)]
@@ -2130,7 +2133,207 @@ async fn delete_price(
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn write_audit(
+/// 免费模型日上限的管理员单独设置（2026-11-21，Wing 定：默认值 30M -> 1B，
+/// 并允许管理员给指定 Key 或指定用户单独调高上限）。
+/// 单独设置存在 free_token_cap_overrides 表里，重启不丢；删除即恢复默认值。
+/// 生效优先级：Key 单独设置 > 用户单独设置 > 默认值/环境变量 DIST_FREE_TOKEN_CAP。
+#[derive(Serialize, FromRow)]
+struct FreeTokenCapOverrideRow {
+    id: i64,
+    key_id: Option<i64>,
+    user_id: Option<i64>,
+    cap_tokens: i64,
+    note: String,
+    created_by: Option<i64>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    key_prefix: Option<String>,
+    username: Option<String>,
+}
+
+/// GET /api/admin/free-token-caps：列出全部单独设置 + 当前默认值（1B 或环境变量）。
+async fn list_free_token_caps(
+    State(state): State<AppState>,
+    AuthUser(actor): AuthUser,
+) -> AppResult<Json<Value>> {
+    require_admin(&actor)?;
+    let overrides: Vec<FreeTokenCapOverrideRow> = sqlx::query_as(
+        "SELECT o.id, o.key_id, o.user_id, o.cap_tokens, o.note, o.created_by, \
+                o.created_at, o.updated_at, k.key_prefix, u.username \
+         FROM free_token_cap_overrides o \
+         LEFT JOIN api_keys k ON k.id = o.key_id \
+         LEFT JOIN users u ON u.id = o.user_id \
+         ORDER BY o.updated_at DESC",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(json!({
+        "default_cap": state.dist_guard.free_token_cap,
+        "overrides": overrides,
+    })))
+}
+
+#[derive(Deserialize)]
+struct SetFreeTokenCapRequest {
+    key_id: Option<i64>,
+    user_id: Option<i64>,
+    cap_tokens: i64,
+    note: Option<String>,
+}
+
+/// POST /api/admin/free-token-caps：给指定 Key 或指定用户设单独上限。
+/// body {"key_id": N} 或 {"user_id": N} 二选一 + {"cap_tokens": 正整数, "note": "可选备注"}。
+/// 已有设置则覆盖（不报错）；目标不存在返回 404。记审计 free_token_cap.set。
+/// 注意：单独设置可高于默认值，也可低于默认值（例如临时压测或处置滥用）。
+async fn set_free_token_cap(
+    State(state): State<AppState>,
+    AuthUser(actor): AuthUser,
+    AppJson(body): AppJson<SetFreeTokenCapRequest>,
+) -> AppResult<Json<Value>> {
+    require_admin(&actor)?;
+    let (target_type, target_id) = match (body.key_id, body.user_id) {
+        (Some(key_id), None) => ("api_key", key_id),
+        (None, Some(user_id)) => ("user", user_id),
+        _ => {
+            return Err(AppError::bad_request("key_id 与 user_id 二选一，只能传一个"));
+        }
+    };
+    if body.cap_tokens <= 0 {
+        return Err(AppError::bad_request("cap_tokens 必须是大于 0 的整数"));
+    }
+    let exists: bool = if target_type == "api_key" {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM api_keys WHERE id = $1)")
+            .bind(target_id)
+            .fetch_one(&state.pool)
+            .await?
+    } else {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)")
+            .bind(target_id)
+            .fetch_one(&state.pool)
+            .await?
+    };
+    if !exists {
+        return Err(AppError::not_found(if target_type == "api_key" {
+            "API Key 不存在"
+        } else {
+            "用户不存在"
+        }));
+    }
+    let note = body
+        .note
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| truncate_chars(s, 200))
+        .unwrap_or_default();
+    let (key_id, user_id): (Option<i64>, Option<i64>) = if target_type == "api_key" {
+        (Some(target_id), None)
+    } else {
+        (None, Some(target_id))
+    };
+    let previous: Option<i64> = sqlx::query_scalar(
+        "SELECT cap_tokens FROM free_token_cap_overrides \
+         WHERE key_id IS NOT DISTINCT FROM $1 AND user_id IS NOT DISTINCT FROM $2",
+    )
+    .bind(key_id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let updated = sqlx::query(
+        "UPDATE free_token_cap_overrides SET cap_tokens = $3, note = $4, \
+                created_by = $5, updated_at = now() \
+         WHERE key_id IS NOT DISTINCT FROM $1 AND user_id IS NOT DISTINCT FROM $2",
+    )
+    .bind(key_id)
+    .bind(user_id)
+    .bind(body.cap_tokens)
+    .bind(&note)
+    .bind(actor.id)
+    .execute(&state.pool)
+    .await?;
+    let id: i64 = if updated.rows_affected() == 0 {
+        sqlx::query_scalar(
+            "INSERT INTO free_token_cap_overrides (key_id, user_id, cap_tokens, note, created_by) \
+             VALUES ($1, $2, $3, $4, $5) RETURNING id",
+        )
+        .bind(key_id)
+        .bind(user_id)
+        .bind(body.cap_tokens)
+        .bind(&note)
+        .bind(actor.id)
+        .fetch_one(&state.pool)
+        .await?
+    } else {
+        sqlx::query_scalar(
+            "SELECT id FROM free_token_cap_overrides \
+             WHERE key_id IS NOT DISTINCT FROM $1 AND user_id IS NOT DISTINCT FROM $2",
+        )
+        .bind(key_id)
+        .bind(user_id)
+        .fetch_one(&state.pool)
+        .await?
+    };
+    write_audit(
+        &state.pool,
+        Some(actor.id),
+        "free_token_cap.set",
+        target_type,
+        &target_id.to_string(),
+        json!({ "cap_tokens": body.cap_tokens, "previous_cap": previous, "note": note }),
+    )
+    .await;
+    Ok(Json(json!({
+        "ok": true,
+        "id": id,
+        "target_type": target_type,
+        "target_id": target_id,
+        "cap_tokens": body.cap_tokens,
+        "previous_cap": previous,
+    })))
+}
+
+/// DELETE /api/admin/free-token-caps/{id}：删除一条单独设置，该 Key/用户恢复默认值。
+/// 不存在返回 404。记审计 free_token_cap.delete。
+async fn delete_free_token_cap(
+    State(state): State<AppState>,
+    AuthUser(actor): AuthUser,
+    Path(id): Path<i64>,
+) -> AppResult<Json<Value>> {
+    require_admin(&actor)?;
+    let row: Option<FreeTokenCapOverrideRow> = sqlx::query_as(
+        "SELECT o.id, o.key_id, o.user_id, o.cap_tokens, o.note, o.created_by, \
+                o.created_at, o.updated_at, k.key_prefix, u.username \
+         FROM free_token_cap_overrides o \
+         LEFT JOIN api_keys k ON k.id = o.key_id \
+         LEFT JOIN users u ON u.id = o.user_id \
+         WHERE o.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let row = row.ok_or_else(|| AppError::not_found("该上限设置不存在"))?;
+    sqlx::query("DELETE FROM free_token_cap_overrides WHERE id = $1")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    let (target_type, target_id) = match (row.key_id, row.user_id) {
+        (Some(key_id), None) => ("api_key", key_id),
+        (None, Some(user_id)) => ("user", user_id),
+        _ => ("unknown", 0),
+    };
+    write_audit(
+        &state.pool,
+        Some(actor.id),
+        "free_token_cap.delete",
+        target_type,
+        &target_id.to_string(),
+        json!({ "cap_tokens": row.cap_tokens, "note": row.note }),
+    )
+    .await;
+    Ok(Json(json!({ "ok": true })))
+}
+
+pub(crate) async fn write_audit(
     pool: &PgPool,
     actor_id: Option<i64>,
     action: &str,

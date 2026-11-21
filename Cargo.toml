@@ -1,0 +1,44 @@
+[package]
+name = "pm-plan"
+version = "1.0.0"
+edition = "2021"
+
+[[bin]]
+name = "pm-plan"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid", "json", "migrate", "macros"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+aes-gcm = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+futures-util = "0.3"
+bytes = "1"
+url = "2"
+http = "1"
+hmac = "0.12"
+hex = "0.4"
+# 滑块拼图验证（2026-11-15）：服务端裁切背景/拼图块用。只开 jpeg，避免拉入 png 等编解码器。
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 4
+strip = true

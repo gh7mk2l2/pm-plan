@@ -400,39 +400,6 @@
       .join("")}</nav>`;
   }
 
-  /* 页脚内容: 登录页与控制台共用同一份, 链接只用站内路由与已有站点 */
-  function footerInner() {
-    return `
-      <div class="footer-grid">
-        <div class="footer-brand">
-          <img src="/static/logo.jpg" alt="PM-Plan">
-          <div>
-            <div class="footer-brand-name">PM-Plan</div>
-            <div class="footer-brand-sub">胖猫也开始卖 Token Plan 了吗。<br>签到养成套餐，按档位调用渠道模型。</div>
-          </div>
-        </div>
-        <div class="footer-col">
-          <h4>产品</h4>
-          <a href="#/">概览</a>
-          <a href="#/keys">API Keys</a>
-          <a href="#/usage">用量</a>
-          <a href="#/models">模型广场</a>
-          <a href="#/plans">套餐</a>
-        </div>
-        <div class="footer-col">
-          <h4>相关站点</h4>
-          <a href="https://plan.pmcat.top" target="_blank" rel="noopener">PM-Plan 首页</a>
-          <a href="https://dygyz.pmcat.top" target="_blank" rel="noopener">PM 节点公益站</a>
-          <a href="https://linux.do" target="_blank" rel="noopener">LINUX DO 社区</a>
-        </div>
-      </div>
-      <div class="footer-bottom">
-        <span>PM-Plan · 胖猫也开始卖 Token Plan 了吗</span>
-        <span>模型权限仅由套餐档位 × 渠道授权决定</span>
-        <span>LINUX DO Connect · 0 级应用</span>
-      </div>`;
-  }
-
   function appShell(content) {
     const me = state.me;
     const adminLink = isAdmin()
@@ -473,7 +440,10 @@
         ${mobileTabs()}
       </header>
       <main class="shell app-page">${content}</main>
-      <footer class="shell footer">${footerInner()}</footer>`;
+      <footer class="shell footer">
+        <span>PM-Plan · 胖猫也开始卖 Token Plan 了吗</span>
+        <span>模型权限仅由套餐档位 × 渠道授权决定</span>
+      </footer>`;
   }
 
   function loadingContent() {
@@ -632,7 +602,10 @@
           </div>
         </section>
 
-        <footer class="footer">${footerInner()}</footer>
+        <footer class="footer">
+          <span>PM-Plan · ${esc(boot.app.homepage)}</span>
+          <span>LINUX DO Connect · 0 级应用</span>
+        </footer>
       </main>`;
     bindAvatarFallbacks();
   }

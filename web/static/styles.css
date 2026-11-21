@@ -24,8 +24,8 @@
   --warning-soft: rgba(255, 209, 102, 0.1);
   --success: #68dba7;
   --success-soft: rgba(104, 219, 167, 0.1);
-  --radius: 14px;
-  --radius-md: 12px;
+  --radius: 20px;
+  --radius-md: 14px;
   --radius-sm: 10px;
   --shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
   --shadow-soft: 0 8px 30px rgba(0, 0, 0, 0.25);
@@ -98,12 +98,6 @@ textarea {
 
 button {
   cursor: pointer;
-}
-
-/* 键盘焦点环: 所有可交互元素统一的可见焦点态 */
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
 }
 
 img {
@@ -240,7 +234,7 @@ html[data-theme="light"] .grid-overlay {
 .boot-logo {
   width: 82px;
   height: 82px;
-  border-radius: 16px;
+  border-radius: 24px;
   box-shadow: 0 20px 60px rgba(255, 130, 60, 0.28);
   animation: breathe 2.4s ease-in-out infinite;
 }
@@ -274,7 +268,7 @@ html[data-theme="light"] .grid-overlay {
 }
 
 .topbar-inner {
-  height: 64px;
+  height: 70px;
   display: flex;
   align-items: center;
   gap: 22px;
@@ -344,7 +338,6 @@ html[data-theme="light"] .nav-link:hover {
 .nav-link.active {
   color: var(--text);
   background: var(--accent-soft);
-  font-weight: 650;
 }
 
 .nav-link svg {
@@ -510,7 +503,6 @@ html[data-theme="light"] .nav-link:hover {
   line-height: 1.04;
   letter-spacing: -0.045em;
   font-weight: 800;
-  text-wrap: balance;
 }
 
 .gradient-text {
@@ -564,7 +556,7 @@ html[data-theme="light"] .gradient-text {
 .visual-card {
   position: relative;
   border: 1px solid var(--border);
-  border-radius: 18px;
+  border-radius: 26px;
   background: linear-gradient(160deg, rgba(38, 35, 44, 0.95), rgba(18, 17, 22, 0.96));
   box-shadow: var(--shadow);
   padding: 26px;
@@ -701,7 +693,7 @@ html[data-theme="light"] .visual-card {
 /* ---------- plan cards ---------- */
 
 .section {
-  margin-top: 72px;
+  margin-top: 80px;
 }
 
 .section-head {
@@ -716,7 +708,6 @@ html[data-theme="light"] .visual-card {
   margin: 0;
   font-size: clamp(26px, 3vw, 36px);
   letter-spacing: -0.035em;
-  text-wrap: balance;
 }
 
 .section-head p {
@@ -744,7 +735,6 @@ html[data-theme="light"] .visual-card {
 .plan-card:hover {
   transform: translateY(-3px);
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-soft);
 }
 
 .plan-card.featured {
@@ -841,13 +831,6 @@ html[data-theme="light"] .visual-card {
   border-radius: var(--radius);
   background: var(--panel);
   padding: 24px;
-  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.feature:hover {
-  transform: translateY(-3px);
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow-soft);
 }
 
 .feature-icon {
@@ -874,77 +857,16 @@ html[data-theme="light"] .visual-card {
   line-height: 1.65;
 }
 
-/* ---------- footer ---------- */
-
 .footer {
   margin-top: 84px;
-  padding: 36px 0 40px;
+  padding: 30px 0 40px;
   border-top: 1px solid var(--border);
-  color: var(--faint);
-  font-size: 12px;
-}
-
-.footer-grid {
-  display: grid;
-  grid-template-columns: 1.5fr 1fr 1fr;
-  gap: 32px;
-  padding-bottom: 28px;
-}
-
-.footer-brand {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.footer-brand img {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  object-fit: cover;
-  flex-shrink: 0;
-}
-
-.footer-brand-name {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text);
-  letter-spacing: -0.01em;
-}
-
-.footer-brand-sub {
-  margin-top: 4px;
-  line-height: 1.7;
-}
-
-.footer-col h4 {
-  margin: 0 0 10px;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.footer-col a {
-  display: block;
-  padding: 4px 0;
-  color: var(--muted);
-  transition: color 0.15s ease;
-}
-
-.footer-col a:hover {
-  color: var(--text);
-}
-
-.footer-bottom {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding-top: 20px;
-  border-top: 1px solid var(--border);
+  gap: 16px;
+  color: var(--faint);
+  font-size: 12px;
 }
 
 /* ---------- buttons ---------- */
@@ -1173,7 +1095,6 @@ html[data-theme="light"] .tier-tag.all {
   font-size: clamp(26px, 3.4vw, 36px);
   letter-spacing: -0.04em;
   font-weight: 760;
-  text-wrap: balance;
 }
 
 .page-sub {
@@ -1538,7 +1459,6 @@ html[data-theme="light"] .cal-day {
   font-size: 24px;
   font-weight: 750;
   letter-spacing: -0.04em;
-  font-variant-numeric: tabular-nums;
   line-height: 1.1;
 }
 
@@ -2793,9 +2713,9 @@ html[data-theme="light"] .textarea {
   .stat-grid-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .footer-grid {
-    grid-template-columns: 1fr;
-    gap: 22px;
+  .footer {
+    flex-direction: column;
+    align-items: flex-start;
   }
   .plan-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2840,7 +2760,7 @@ html[data-theme="light"] .textarea {
   }
   .card {
     padding: 19px;
-    border-radius: 14px;
+    border-radius: 17px;
   }
   .plan-hero-name {
     font-size: 34px;
@@ -2894,7 +2814,7 @@ html[data-theme="light"] .textarea {
   }
   .modal {
     max-height: 92vh;
-    border-radius: 16px;
+    border-radius: 18px;
   }
   .modal-head,
   .modal-body,
@@ -3622,47 +3542,6 @@ html[data-theme="light"] .model-logo.brand-svg {
   font-size: 13px;
 }
 .captcha-loading svg { animation: spinSlow 0.9s linear infinite; color: var(--accent); }
-/* ============================================================
-   界面抛光 (2026-11-21): 参考 Minimal Gallery / Saaspo / Land-book
-   的克制做法 —— 卡片组依次入场、移动端 CTA 纵向铺满、页脚单列。
-   只做视觉层, 不动任何功能与文案。入场动效仅在允许动效时生效。
-   ============================================================ */
-
-@media (prefers-reduced-motion: no-preference) {
-  .plan-grid .plan-card,
-  .feature-grid .feature {
-    animation: fadeUp 0.5s var(--ease-out) both;
-  }
-  .plan-grid .plan-card:nth-child(2),
-  .feature-grid .feature:nth-child(2) {
-    animation-delay: 0.05s;
-  }
-  .plan-grid .plan-card:nth-child(3),
-  .feature-grid .feature:nth-child(3) {
-    animation-delay: 0.1s;
-  }
-  .plan-grid .plan-card:nth-child(4) {
-    animation-delay: 0.15s;
-  }
-  .plan-grid .plan-card:nth-child(5) {
-    animation-delay: 0.2s;
-  }
-  .plan-grid .plan-card:nth-child(n + 6) {
-    animation-delay: 0.25s;
-  }
-}
-
-@media (max-width: 640px) {
-  /* 移动端 CTA 纵向铺满, 一指一个按钮, 不挤在一行 */
-  .hero-cta {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .hero-cta .btn {
-    justify-content: center;
-  }
-}
-
 /* 验证失败/过期时的提示更醒目 */
 #captcha-widget-tip {
   text-align: center;

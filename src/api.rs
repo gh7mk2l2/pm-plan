@@ -293,7 +293,7 @@ async fn me(State(state): State<AppState>, AuthUser(user): AuthUser) -> AppResul
 
     Ok(Json(MeResponse {
         user: user_view,
-        plan: plan_info,
+        plan: plan_info.clone(),
         usage: UsageView {
             h5_used: quota.h5,
             h5_limit: plan_info.limits.h5,
@@ -824,6 +824,7 @@ async fn model_square(
 #[cfg(test)]
 mod square_tests {
     use super::build_tier_map;
+    use crate::plans;
 
     #[test]
     fn tier_map_rules() {

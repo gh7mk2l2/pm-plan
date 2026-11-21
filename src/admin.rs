@@ -2406,6 +2406,7 @@ fn usd_limit(value: Option<f64>, label: &str) -> AppResult<Option<i64>> {
     match value {
         None => Ok(None),
         Some(v) => plans::dollars_to_micro(v)
+            .map(Some)
             .ok_or_else(|| AppError::bad_request(format!("{label}额度需在 0–1,000,000 美元之间"))),
     }
 }

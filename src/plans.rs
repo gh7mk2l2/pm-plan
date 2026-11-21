@@ -231,7 +231,7 @@ pub fn rank(code: &str) -> i32 {
 
 /// 合并内置档与自定义套餐（纯函数，便于单测）：内置档在前（PLANS 顺序，
 /// 描述可被 `plan_descriptions` 覆盖），自定义套餐在后（sort_order，
-//! 再按 code）。
+/// 再按 code）。
 pub fn merge_plans(overrides: &HashMap<String, String>, customs: &[CustomPlanRow]) -> Vec<PlanView> {
     let mut out: Vec<PlanView> = PLANS
         .iter()

@@ -4,7 +4,6 @@
 
 PM-Plan 是一个从零实现的 Token Plan 分发平台：Rust + axum + sqlx + PostgreSQL 后端，原生 LINUX DO Connect OAuth，签到养成套餐，按套餐档位与渠道授权的交集开放模型，Key 只用两个配置项。前端为无构建步骤的原生 SPA。
 
-本项目独立实现，未复制 New-API 代码。系统内**不存在任何分组概念**：数据库没有 `group` / `group_id` / `user_group` 字段，用户、渠道、Key 都没有分组属性。
 
 ---
 

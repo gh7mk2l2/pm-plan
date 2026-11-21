@@ -135,7 +135,12 @@ pub(crate) async fn record_checkin(
     if plans::rank(auto) > plans::rank(&earned) {
         earned = auto.to_string();
     }
-    if plans::rank(auto) > plans::rank(&plan) {
+    // 自定义套餐不参与签到自动升级：用户当前档位是自定义套餐时，签到
+    // 只更新 earned_plan（内置梯队），plan 保持管理员授予的自定义套餐。
+    // 同步 rank 对自定义 code 返回 1000，本来也不会降级，这里再显式守住。
+    if !plans::is_builtin(&plan) {
+        // plan stays as the admin-granted custom plan.
+    } else if plans::rank(auto) > plans::rank(&plan) {
         plan = auto.to_string();
         upgraded_to = Some(auto.to_string());
     }

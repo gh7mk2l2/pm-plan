@@ -312,8 +312,24 @@ pub async fn handle_proxy(
     };
     rec.channel_id = Some(pick.channel_id);
 
-    // Step 4: rolling 5h / 7d / 30d quota.
-    let plan_info = crate::plans::plan(&auth.user.plan);
+    // Step 4: rolling 5h / 7d / 30d quota. Plan limits come from the merged
+    // plan list (builtin + custom_plans), so a custom plan's limits apply here.
+    let plan_info = match crate::plans::load_plan(&state.pool, &auth.user.plan).await {
+        Ok(plan_info) => plan_info,
+        Err(err) => {
+            tracing::error!(error = %err, "plan lookup failed");
+            return deny(
+                &state,
+                rec,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "额度校验失败",
+                started,
+                &request_id,
+            )
+            .await;
+        }
+    };
     let used = match quota_usage(&state.pool, auth.user.id).await {
         Ok(used) => used,
         Err(err) => {
@@ -330,7 +346,7 @@ pub async fn handle_proxy(
             .await;
         }
     };
-    if let Some((window, used_micro, limit)) = usage::exceeded_window(plan_info, &used) {
+    if let Some((window, used_micro, limit)) = usage::exceeded_window(&plan_info.limits, &used) {
         tracing::info!(
             user_id = auth.user.id,
             window = window.code(),
@@ -348,7 +364,7 @@ pub async fn handle_proxy(
         }
         return resp;
     }
-    let quota_headers = quota_response_headers(&auth.user.plan, &used);
+    let quota_headers = quota_response_headers(&plan_info, &used);
 
     // Step 4b: 免费模型（零定价）当日 token 上限。定价为 0 的模型不受成本
     // 额度约束，单 Key / 单用户每天各限生效上限（默认 1,000,000,000，

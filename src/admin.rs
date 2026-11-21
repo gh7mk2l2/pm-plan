@@ -5,7 +5,7 @@ use crate::error::{AppError, AppJson, AppResult};
 use crate::models::{Channel, ChannelModel, PlanApplication, UsageLog, User};
 use crate::plans;
 use crate::state::AppState;
-use crate::util::{is_valid_tier, truncate_chars};
+use crate::util::{truncate_chars};
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::routing::{delete, get, patch, post, put};
@@ -64,6 +64,8 @@ pub fn router() -> Router<AppState> {
         )
         .route("/free-token-caps", get(list_free_token_caps).post(set_free_token_cap))
         .route("/free-token-caps/{id}", delete(delete_free_token_cap))
+        .route("/plans", get(list_plans).post(create_plan))
+        .route("/plans/{code}", patch(update_plan).delete(delete_plan))
 }
 
 #[derive(Serialize)]
@@ -521,18 +523,33 @@ async fn grant_plan(
 ) -> AppResult<Json<Value>> {
     require_admin(&actor)?;
     let target_plan = body.plan.trim().to_ascii_lowercase();
-    if !matches!(target_plan.as_str(), "plus" | "pro" | "max" | "ultra") {
-        return Err(AppError::bad_request("只能手动授予 Plus、Pro、Max 或 Ultra"));
+    // 手动授予：内置档只放 Plus / Pro / Max / Ultra（低档位靠签到获得）；
+    // 自定义套餐只能靠手动授予获得，所以一律可授。目标必须真实存在。
+    let merged = plans::load_all_plans(&state.pool).await?;
+    let target_view = merged
+        .iter()
+        .find(|plan| plan.code == target_plan)
+        .ok_or_else(|| AppError::bad_request(format!("未知套餐：{target_plan}")))?;
+    if target_view.builtin && !matches!(target_plan.as_str(), "plus" | "pro" | "max" | "ultra") {
+        return Err(AppError::bad_request(
+            "内置套餐只能手动授予 Plus、Pro、Max 或 Ultra（低档位靠签到获得）",
+        ));
     }
     let target: User = sqlx::query_as("SELECT * FROM users WHERE id = $1")
         .bind(id)
         .fetch_optional(&state.pool)
         .await?
         .ok_or_else(|| AppError::not_found("用户不存在"))?;
-    if plans::rank(&target.plan) >= plans::rank(&target_plan) {
+    let current_rank = plans::merged_rank(&state.pool, &target.plan).await?;
+    let target_rank = plans::merged_rank(&state.pool, &target_plan).await?;
+    if current_rank >= target_rank {
+        let current_name = merged
+            .iter()
+            .find(|plan| plan.code == target.plan)
+            .map(|plan| plan.name.clone())
+            .unwrap_or_else(|| target.plan.clone());
         return Err(AppError::bad_request(format!(
-            "用户当前已是 {} 或更高档位",
-            plans::plan(&target.plan).name
+            "用户当前已是 {current_name} 或更高档位"
         )));
     }
 
@@ -563,7 +580,7 @@ async fn grant_plan(
     .fetch_all(&mut *tx)
     .await?;
     for app in pending {
-        if plans::rank(&app.target_plan) <= plans::rank(&target_plan) {
+        if plans::merged_rank(&state.pool, &app.target_plan).await? <= target_rank {
             sqlx::query(
                 "UPDATE plan_applications SET status = 'approved', reviewed_at = now(), \
                  reviewed_by = $2, review_note = $3 WHERE id = $1",
@@ -603,10 +620,12 @@ async fn revoke_plan(
         .fetch_optional(&state.pool)
         .await?
         .ok_or_else(|| AppError::not_found("用户不存在"))?;
-    if plans::rank(&target.plan) < plans::rank("plus") {
+    if plans::merged_rank(&state.pool, &target.plan).await? < plans::merged_rank(&state.pool, "plus").await? {
         return Err(AppError::bad_request("当前没有可撤销的 Plus / Pro / Max 档位"));
     }
-    let fallback = if plans::rank(&target.earned_plan) < plans::rank(&target.plan) {
+    let fallback = if plans::merged_rank(&state.pool, &target.earned_plan).await?
+        < plans::merged_rank(&state.pool, &target.plan).await?
+    {
         target.earned_plan.clone()
     } else {
         "standard".to_string()
@@ -727,7 +746,9 @@ async fn approve_application(
         .filter(|s| !s.is_empty())
         .map(|s| truncate_chars(s, 200));
     let mut changed = false;
-    if plans::rank(&app.target_plan) > plans::rank(&target.plan) {
+    if plans::merged_rank(&state.pool, &app.target_plan).await?
+        > plans::merged_rank(&state.pool, &target.plan).await?
+    {
         sqlx::query(
             "UPDATE users SET plan = $2, plan_source = 'approval', updated_at = now() WHERE id = $1",
         )
@@ -771,7 +792,10 @@ async fn approve_application(
         .execute(&mut *tx)
         .await?;
     }
-    if app.target_plan == "max" && plans::rank(&target.plan) < plans::rank("ultra") {
+    if app.target_plan == "max"
+        && plans::merged_rank(&state.pool, &target.plan).await?
+            < plans::merged_rank(&state.pool, "ultra").await?
+    {
         enqueue_ultra_candidate(&mut tx, target.id).await?;
     }
     tx.commit().await?;
@@ -887,7 +911,7 @@ async fn bootstrap_channel(
         return Err(AppError::bad_request("渠道名称与 API Key 不能为空"));
     }
     let base_url = normalize_base_url(&body.base_url)?;
-    let tiers = checked_tiers(&body.tiers)?;
+    let tiers = checked_tiers(&state.pool, &body.tiers).await?;
     let enc = state
         .crypto
         .encrypt(body.api_key.trim().as_bytes())
@@ -1031,14 +1055,19 @@ async fn list_channels(
     Ok(Json(json!({ "channels": rows })))
 }
 
-fn checked_tiers(input: &[String]) -> AppResult<Vec<String>> {
+/// 校验档位列表：内置档 + 自定义套餐都合法（查合并后的套餐表）。
+/// 空列表 = 全部档位可用（含未来新增档位），与渠道授权语义一致。
+async fn checked_tiers(pool: &PgPool, input: &[String]) -> AppResult<Vec<String>> {
+    let known = plans::load_all_plans(pool).await?;
+    let codes: std::collections::HashSet<&str> =
+        known.iter().map(|plan| plan.code.as_str()).collect();
     let mut out = Vec::new();
     for raw in input {
         let tier = raw.trim().to_ascii_lowercase();
         if tier.is_empty() {
             continue;
         }
-        if !is_valid_tier(&tier) {
+        if !codes.contains(tier.as_str()) {
             return Err(AppError::bad_request(format!("未知套餐档位：{tier}")));
         }
         out.push(tier);
@@ -1141,7 +1170,7 @@ async fn create_channel(
     if api_key.is_empty() {
         return Err(AppError::bad_request("渠道 API Key 不能为空"));
     }
-    let tiers = checked_tiers(&body.tiers)?;
+    let tiers = checked_tiers(&state.pool, &body.tiers).await?;
     let extra_headers = checked_extra_headers(body.extra_headers.as_ref().unwrap_or(&Value::Null))?;
     let param_override = checked_param_override(body.param_override.as_ref().unwrap_or(&Value::Null))?;
     let test_model = checked_test_model(body.test_model.as_deref())?;
@@ -1251,7 +1280,7 @@ async fn update_channel(
         None => (channel.api_key_enc.clone(), channel.key_hint.clone()),
     };
     let tiers = match body.tiers {
-        Some(tiers) => Some(checked_tiers(&tiers)?),
+        Some(tiers) => Some(checked_tiers(&state.pool, &tiers).await?),
         None => None,
     };
     let extra_headers = match &body.extra_headers {
@@ -1562,7 +1591,7 @@ async fn add_model(
     }
     let input = body.input_micro.filter(|v| *v >= 0);
     let output = body.output_micro.filter(|v| *v >= 0);
-    let tiers = checked_tiers(body.tiers.as_deref().unwrap_or(&[]))?;
+    let tiers = checked_tiers(&state.pool, body.tiers.as_deref().unwrap_or(&[])).await?;
     let upstream = body
         .upstream_model
         .as_deref()
@@ -1660,7 +1689,7 @@ async fn update_model(
         None => model.upstream_model.clone(),
     };
     let tiers = match body.tiers {
-        Some(tiers) => Some(checked_tiers(&tiers)?),
+        Some(tiers) => Some(checked_tiers(&state.pool, &tiers).await?),
         None => None,
     };
     let mut tx = state.pool.begin().await?;
@@ -1743,7 +1772,7 @@ async fn set_channel_tiers(
     AppJson(body): AppJson<TiersRequest>,
 ) -> AppResult<Json<Value>> {
     require_admin(&actor)?;
-    let tiers = checked_tiers(&body.tiers)?;
+    let tiers = checked_tiers(&state.pool, &body.tiers).await?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("DELETE FROM channel_tiers WHERE channel_id = $1")
         .bind(id)
@@ -1776,7 +1805,7 @@ async fn set_model_tiers(
     AppJson(body): AppJson<TiersRequest>,
 ) -> AppResult<Json<Value>> {
     require_admin(&actor)?;
-    let tiers = checked_tiers(&body.tiers)?;
+    let tiers = checked_tiers(&state.pool, &body.tiers).await?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("DELETE FROM channel_model_tiers WHERE channel_model_id = $1")
         .bind(id)
@@ -1818,7 +1847,7 @@ async fn bulk_tiers(
     if body.channel_ids.is_empty() {
         return Err(AppError::bad_request("请选择至少一个渠道"));
     }
-    let tiers = checked_tiers(&body.tiers)?;
+    let tiers = checked_tiers(&state.pool, &body.tiers).await?;
     let mut tx = state.pool.begin().await?;
     for channel_id in &body.channel_ids {
         sqlx::query("DELETE FROM channel_tiers WHERE channel_id = $1")
@@ -1942,13 +1971,14 @@ async fn get_settings(
     .fetch_one(&state.pool)
     .await?;
     let auto = channels::auto_test_settings(&state.pool).await;
+    let plans = plans::load_all_plans(&state.pool).await?;
     Ok(Json(json!({
         "registration_open": registration_open,
         "channel_auto_test_minutes": auto.interval_minutes,
         "channel_auto_disable": auto.auto_disable,
         "base_url": state.cfg.base_url,
         "callback_url": state.cfg.redirect_uri(),
-        "plans": plans::PLANS,
+        "plans": plans,
     })))
 }
 
@@ -2328,6 +2358,310 @@ async fn delete_free_token_cap(
         target_type,
         &target_id.to_string(),
         json!({ "cap_tokens": row.cap_tokens, "note": row.note }),
+    )
+    .await;
+    Ok(Json(json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// 套餐管理（2026-11-21 自定义套餐）：管理员添加/删除套餐、改描述。
+// 内置档不可删除、不可改档位与额度（仅可改描述，存在 plan_descriptions）；
+// 自定义套餐可改描述/名称/额度/排序，删除受 delete_block_reason 保护。
+// 自定义套餐不参与签到自动升级，只能手动授予（见 plans.rs 模块注释）。
+// ---------------------------------------------------------------------------
+
+/// GET /api/admin/plans：内置档 + 自定义套餐合并列表。
+async fn list_plans(
+    State(state): State<AppState>,
+    AuthUser(actor): AuthUser,
+) -> AppResult<Json<Value>> {
+    require_admin(&actor)?;
+    let plans = plans::load_all_plans(&state.pool).await?;
+    Ok(Json(json!({ "plans": plans })))
+}
+
+#[derive(Deserialize)]
+struct CreatePlanRequest {
+    code: String,
+    name: String,
+    /// 描述；JSON 字段名保持 tagline（与 /api/plans 一致），后台 UI 里叫“描述”。
+    tagline: String,
+    /// 各窗口额度（美元，空 = 不限；库里存 micro-USD）。
+    #[serde(default)]
+    h5_usd: Option<f64>,
+    #[serde(default)]
+    weekly_usd: Option<f64>,
+    #[serde(default)]
+    monthly_usd: Option<f64>,
+    /// 仅作展示与将来扩展用；自定义套餐不参与签到自动升级。
+    #[serde(default)]
+    checkin_days: Option<i32>,
+    #[serde(default)]
+    requires_approval: bool,
+    #[serde(default)]
+    sort_order: i32,
+}
+
+fn usd_limit(value: Option<f64>, label: &str) -> AppResult<Option<i64>> {
+    match value {
+        None => Ok(None),
+        Some(v) => plans::dollars_to_micro(v)
+            .ok_or_else(|| AppError::bad_request(format!("{label}额度需在 0–1,000,000 美元之间"))),
+    }
+}
+
+fn checked_checkin_days(value: Option<i32>) -> AppResult<Option<i32>> {
+    match value {
+        None => Ok(None),
+        Some(days) if (1..=365).contains(&days) => Ok(Some(days)),
+        Some(_) => Err(AppError::bad_request("连续签到天数需在 1–365 之间")),
+    }
+}
+
+/// POST /api/admin/plans：创建自定义套餐。body {code, name, tagline,
+/// h5_usd?, weekly_usd?, monthly_usd?, checkin_days?, requires_approval?,
+/// sort_order?}；code 不可与内置档重名、不可重复。记审计 plan.create。
+async fn create_plan(
+    State(state): State<AppState>,
+    AuthUser(actor): AuthUser,
+    AppJson(body): AppJson<CreatePlanRequest>,
+) -> AppResult<Json<Value>> {
+    require_admin(&actor)?;
+    let code = plans::validate_code(&body.code).map_err(AppError::bad_request)?;
+    if plans::is_builtin(&code) {
+        return Err(AppError::conflict("该 code 是内置套餐，不能创建同名自定义套餐"));
+    }
+    let name = plans::validate_name(&body.name).map_err(AppError::bad_request)?;
+    let tagline = plans::validate_tagline(&body.tagline).map_err(AppError::bad_request)?;
+    let h5 = usd_limit(body.h5_usd, "5 小时")?;
+    let weekly = usd_limit(body.weekly_usd, "7 天")?;
+    let monthly = usd_limit(body.monthly_usd, "30 天")?;
+    let checkin_days = checked_checkin_days(body.checkin_days)?;
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM custom_plans WHERE code = $1)")
+        .bind(&code)
+        .fetch_one(&state.pool)
+        .await?;
+    if exists {
+        return Err(AppError::conflict("该套餐 code 已存在"));
+    }
+    sqlx::query(
+        "INSERT INTO custom_plans (code, name, tagline, h5_micro, weekly_micro, monthly_micro, \
+         checkin_days, requires_approval, sort_order) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(&code)
+    .bind(&name)
+    .bind(&tagline)
+    .bind(h5)
+    .bind(weekly)
+    .bind(monthly)
+    .bind(checkin_days)
+    .bind(body.requires_approval)
+    .bind(body.sort_order.clamp(-1000, 1000))
+    .execute(&state.pool)
+    .await?;
+    write_audit(
+        &state.pool,
+        Some(actor.id),
+        "plan.create",
+        "plan",
+        &code,
+        json!({ "name": name, "tagline": tagline }),
+    )
+    .await;
+    let plan = plans::load_plan(&state.pool, &code).await?;
+    Ok(Json(json!({ "ok": true, "plan": plan })))
+}
+
+#[derive(Deserialize)]
+struct UpdatePlanRequest {
+    #[serde(default)]
+    name: Option<String>,
+    /// 描述；内置档与自定义套餐都可改。
+    #[serde(default)]
+    tagline: Option<String>,
+    /// 三档额度：字段缺失 = 不改；显式 null = 改为不限；数字 = 改为该美元额度。
+    #[serde(default)]
+    h5_usd: Option<Option<f64>>,
+    #[serde(default)]
+    weekly_usd: Option<Option<f64>>,
+    #[serde(default)]
+    monthly_usd: Option<Option<f64>>,
+    #[serde(default)]
+    checkin_days: Option<Option<i32>>,
+    #[serde(default)]
+    requires_approval: Option<bool>,
+    #[serde(default)]
+    sort_order: Option<i32>,
+}
+
+/// PATCH /api/admin/plans/{code}：改描述（内置档与自定义套餐都可改）；
+/// 自定义套餐还可改名称、额度、签到天数、审批与排序。内置档的其它字段
+/// 一律拒绝。记审计 plan.update。
+async fn update_plan(
+    State(state): State<AppState>,
+    AuthUser(actor): AuthUser,
+    Path(code): Path<String>,
+    AppJson(body): AppJson<UpdatePlanRequest>,
+) -> AppResult<Json<Value>> {
+    require_admin(&actor)?;
+    let code = code.trim().to_ascii_lowercase();
+    if plans::is_builtin(&code) {
+        if body.name.is_some()
+            || body.h5_usd.is_some()
+            || body.weekly_usd.is_some()
+            || body.monthly_usd.is_some()
+            || body.checkin_days.is_some()
+            || body.requires_approval.is_some()
+            || body.sort_order.is_some()
+        {
+            return Err(AppError::bad_request("内置套餐仅可修改描述，档位与额度不可改"));
+        }
+        let tagline = body
+            .tagline
+            .as_deref()
+            .map(plans::validate_tagline)
+            .transpose()
+            .map_err(AppError::bad_request)?
+            .ok_or_else(|| AppError::bad_request("请填写新的描述"))?;
+        sqlx::query(
+            "INSERT INTO plan_descriptions (code, tagline, updated_at) VALUES ($1, $2, now()) \
+             ON CONFLICT (code) DO UPDATE SET tagline = EXCLUDED.tagline, updated_at = now()",
+        )
+        .bind(&code)
+        .bind(&tagline)
+        .execute(&state.pool)
+        .await?;
+        write_audit(
+            &state.pool,
+            Some(actor.id),
+            "plan.update",
+            "plan",
+            &code,
+            json!({ "tagline": tagline }),
+        )
+        .await;
+        let plan = plans::load_plan(&state.pool, &code).await?;
+        return Ok(Json(json!({ "ok": true, "plan": plan })));
+    }
+
+    let row: Option<plans::CustomPlanRow> = sqlx::query_as(
+        "SELECT code, name, tagline, h5_micro, weekly_micro, monthly_micro, \
+                checkin_days, requires_approval, sort_order, created_at \
+         FROM custom_plans WHERE code = $1",
+    )
+    .bind(&code)
+    .fetch_optional(&state.pool)
+    .await?;
+    let row = row.ok_or_else(|| AppError::not_found("套餐不存在"))?;
+    let name = match body.name.as_deref() {
+        Some(value) => plans::validate_name(value).map_err(AppError::bad_request)?,
+        None => row.name.clone(),
+    };
+    let tagline = match body.tagline.as_deref() {
+        Some(value) => plans::validate_tagline(value).map_err(AppError::bad_request)?,
+        None => row.tagline.clone(),
+    };
+    let h5 = match body.h5_usd {
+        Some(value) => usd_limit(value, "5 小时")?,
+        None => row.h5_micro,
+    };
+    let weekly = match body.weekly_usd {
+        Some(value) => usd_limit(value, "7 天")?,
+        None => row.weekly_micro,
+    };
+    let monthly = match body.monthly_usd {
+        Some(value) => usd_limit(value, "30 天")?,
+        None => row.monthly_micro,
+    };
+    let checkin_days = match body.checkin_days {
+        Some(value) => checked_checkin_days(value)?,
+        None => row.checkin_days,
+    };
+    let requires_approval = body.requires_approval.unwrap_or(row.requires_approval);
+    let sort_order = body.sort_order.unwrap_or(row.sort_order).clamp(-1000, 1000);
+    sqlx::query(
+        "UPDATE custom_plans SET name = $2, tagline = $3, h5_micro = $4, weekly_micro = $5, \
+         monthly_micro = $6, checkin_days = $7, requires_approval = $8, sort_order = $9, \
+         updated_at = now() WHERE code = $1",
+    )
+    .bind(&code)
+    .bind(&name)
+    .bind(&tagline)
+    .bind(h5)
+    .bind(weekly)
+    .bind(monthly)
+    .bind(checkin_days)
+    .bind(requires_approval)
+    .bind(sort_order)
+    .execute(&state.pool)
+    .await?;
+    write_audit(
+        &state.pool,
+        Some(actor.id),
+        "plan.update",
+        "plan",
+        &code,
+        json!({ "name": name, "tagline": tagline }),
+    )
+    .await;
+    let plan = plans::load_plan(&state.pool, &code).await?;
+    Ok(Json(json!({ "ok": true, "plan": plan })))
+}
+
+/// DELETE /api/admin/plans/{code}：删除自定义套餐。内置档、有人持有、
+/// 被渠道/模型档位授权引用、有待审批申请的，一律拒绝（见
+/// plans::delete_block_reason，不静默改派用户）。记审计 plan.delete。
+async fn delete_plan(
+    State(state): State<AppState>,
+    AuthUser(actor): AuthUser,
+    Path(code): Path<String>,
+) -> AppResult<Json<Value>> {
+    require_admin(&actor)?;
+    let code = code.trim().to_ascii_lowercase();
+    let users_holding: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM users WHERE plan = $1 OR earned_plan = $1",
+    )
+    .bind(&code)
+    .fetch_one(&state.pool)
+    .await?;
+    let channel_tiers: i64 = sqlx::query_scalar("SELECT count(*) FROM channel_tiers WHERE tier = $1")
+        .bind(&code)
+        .fetch_one(&state.pool)
+        .await?;
+    let model_tiers: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM channel_model_tiers WHERE tier = $1")
+            .bind(&code)
+            .fetch_one(&state.pool)
+            .await?;
+    let pending: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM plan_applications WHERE target_plan = $1 AND status = 'pending'",
+    )
+    .bind(&code)
+    .fetch_one(&state.pool)
+    .await?;
+    if let Some(reason) = plans::delete_block_reason(
+        plans::is_builtin(&code),
+        users_holding,
+        channel_tiers,
+        model_tiers,
+        pending,
+    ) {
+        return Err(AppError::conflict(reason));
+    }
+    let deleted = sqlx::query("DELETE FROM custom_plans WHERE code = $1")
+        .bind(&code)
+        .execute(&state.pool)
+        .await?;
+    if deleted.rows_affected() == 0 {
+        return Err(AppError::not_found("套餐不存在"));
+    }
+    write_audit(
+        &state.pool,
+        Some(actor.id),
+        "plan.delete",
+        "plan",
+        &code,
+        json!({}),
     )
     .await;
     Ok(Json(json!({ "ok": true })))

@@ -1,5 +1,5 @@
 use crate::models::ChannelPick;
-use crate::plans::{plan, PlanInfo};
+use crate::plans::{PlanLimits, PlanView};
 use crate::util::micro_to_usd;
 use rand::Rng;
 use serde_json::Value;
@@ -88,18 +88,18 @@ pub async fn free_tokens_today(
     Ok(row)
 }
 
-pub fn exceeded_window(plan_info: &PlanInfo, usage: &QuotaUsage) -> Option<(QuotaWindow, i64, i64)> {
-    if let Some(limit) = plan_info.limits.h5 {
+pub fn exceeded_window(limits: &PlanLimits, usage: &QuotaUsage) -> Option<(QuotaWindow, i64, i64)> {
+    if let Some(limit) = limits.h5 {
         if usage.h5 >= limit {
             return Some((QuotaWindow::H5, usage.h5, limit));
         }
     }
-    if let Some(limit) = plan_info.limits.weekly {
+    if let Some(limit) = limits.weekly {
         if usage.d7 >= limit {
             return Some((QuotaWindow::Week, usage.d7, limit));
         }
     }
-    if let Some(limit) = plan_info.limits.monthly {
+    if let Some(limit) = limits.monthly {
         if usage.d30 >= limit {
             return Some((QuotaWindow::Month, usage.d30, limit));
         }
@@ -107,9 +107,9 @@ pub fn exceeded_window(plan_info: &PlanInfo, usage: &QuotaUsage) -> Option<(Quot
     None
 }
 
-pub fn quota_response_headers(plan_code: &str, usage: &QuotaUsage) -> Vec<(&'static str, String)> {
-    let info = plan(plan_code);
-    let mut headers = vec![("x-pmplan-plan", plan_code.to_string())];
+pub fn quota_response_headers(plan: &PlanView, usage: &QuotaUsage) -> Vec<(&'static str, String)> {
+    let info = plan;
+    let mut headers = vec![("x-pmplan-plan", plan.code.clone())];
     if let Some(limit) = info.limits.h5 {
         headers.push(("x-pmplan-5h-limit", micro_to_usd(limit)));
         headers.push((
@@ -449,18 +449,18 @@ mod tests {
         let lite = plan("lite");
         let usage = QuotaUsage { h5: 1_000_000, d7: 0, d30: 0 };
         assert_eq!(
-            exceeded_window(lite, &usage),
+            exceeded_window(&lite.limits, &usage),
             Some((QuotaWindow::H5, 1_000_000, 1_000_000))
         );
         let usage = QuotaUsage { h5: 0, d7: 2_000_000, d30: 0 };
         assert_eq!(
-            exceeded_window(lite, &usage),
+            exceeded_window(&lite.limits, &usage),
             Some((QuotaWindow::Week, 2_000_000, 2_000_000))
         );
         let max = plan("max");
         let usage = QuotaUsage { h5: 100_000_000, d7: i64::MAX, d30: i64::MAX };
         assert_eq!(
-            exceeded_window(max, &usage),
+            exceeded_window(&max.limits, &usage),
             Some((QuotaWindow::H5, 100_000_000, 100_000_000))
         );
     }

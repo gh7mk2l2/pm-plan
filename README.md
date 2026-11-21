@@ -20,16 +20,27 @@ PM-Plan 是一个从零实现的 Token Plan 分发平台：Rust + axum + sqlx + 
 
 | 套餐 | 获取条件 | 5H | 7D | 30D |
 | --- | --- | --- | --- | --- |
-| Lite | 注册即得 | $1 | $2 | $5 |
+| Go | 注册即得 | $0.5 | $1 | $2.5 |
+| Lite | 累计签到 7 天（不必连续） | $1 | $2 | $5 |
 | Essential | 连续签到 15 天 | $5 | $30 | $75 |
 | Standard | 连续签到 30 天 | $10 | $35 | 不限 |
-| Pro | 连续签到 50 天进入候补，站长审批 | $25 | 不限 | 不限 |
-| Max | 连续签到 100 天进入候补，站长审批；也可手动授予 | $50 | 不限 | 不限 |
+| Plus | 连续签到 50 天 | $25 | 不限 | 不限 |
+| Pro | 连续签到 70 天 | $50 | 不限 | 不限 |
+| Max | 连续签到 120 天进入候补，站长审批；也可手动授予 | $100 | 不限 | 不限 |
+| Ultra | 升级 Max 后自动进入候补，站长审批 | $200 | 不限 | 不限 |
 
 - 连续签到按自然日（`Asia/Shanghai`）计算，断签后连续计数重置。
 - 断签保留已获得的最高套餐；自动升级只升不降。
 - Pro / Max 的最终归属以站长审批为准；站长可手动授予/撤销。
 - 额度窗口为滚动 5H / 7D / 30D，请求前硬性校验，超出返回 429 并写入用量审计。
+
+### 自定义套餐（站长后台，迁移 0012）
+
+- 站长在后台“套餐”页添加自定义套餐：code（小写 slug，2–32 字符，不可与内置档重名）、名称、**描述**、5H / 7D / 30D 额度（美元，留空 = 不限）、排序值、是否需审批。新建套餐默认没有任何渠道授权，须去“渠道”页勾选档位后才有可用模型。
+- 描述是套餐的一等字段：`/api/plans` 返回的 `tagline` 就是描述，前端套餐展示直接用它。内置档的描述也可以改（Go 的描述现在就是“注册即得”），改描述只写 `plan_descriptions` 表，不动档位与额度；自定义套餐的描述、名称、额度、排序都可在后台改。
+- 自定义套餐**不参与签到自动升级**，只能由管理员在用户页“授予套餐”手动授予；`checkin_days` 字段只存着作展示与将来扩展用。手动授予时后端按合并后的档位顺序校验，只能授予比当前档位更高的套餐。
+- 删除保护：内置套餐不可删除；有人持有（`plan` 或 `earned_plan`）、被渠道/模型档位授权引用、或有待审批申请指向的自定义套餐，删除会被拒绝（409，不静默改派用户）。
+- 迁移 `0012_custom_plans.sql` 新建 `custom_plans` 与 `plan_descriptions` 两张表，并删掉 `users.plan` / `users.earned_plan` / `channel_tiers.tier` / `channel_model_tiers.tier` / `plan_applications.target_plan` 上的档位枚举 CHECK 约束（只删不加新枚举，非法 code 由后端校验拦截）。
 
 ### 渠道与档位授权
 
@@ -80,7 +91,7 @@ src/
   admin.rs      站长后台 API
   proxy.rs      OpenAI 兼容代理、SSE 流式转发、校验顺序
   usage.rs      额度窗口、费用计算、模型可用集合、渠道选择、审计写入
-  plans.rs      套餐常量与升级规则
+  plans.rs      套餐常量与升级规则、自定义套餐合并（custom_plans / plan_descriptions）
   channels.rs   上游模型拉取与健康巡检
   models.rs     数据库行结构
   crypto.rs     AES-256-GCM
@@ -184,7 +195,7 @@ LINUX DO Connect 配置：
 | DELETE | `/api/keys/{id}` | 撤销 Key |
 | GET | `/api/usage?page=` | 个人用量 |
 | GET | `/api/models` | 当前套餐可用模型与价格 |
-| GET | `/api/plans` | 套餐常量 |
+| GET | `/api/plans` | 套餐列表（内置档 + 自定义套餐，含描述与额度） |
 
 ### 站长（需 root/admin + CSRF 头）
 
@@ -193,7 +204,7 @@ LINUX DO Connect 配置：
 | GET | `/api/admin/overview` | 全局统计 |
 | GET | `/api/admin/users?q=&page=` | 用户列表 |
 | POST | `/api/admin/users/{id}/ban` | 封禁/解封 |
-| POST | `/api/admin/users/{id}/grant` | 手动授予 Pro/Max |
+| POST | `/api/admin/users/{id}/grant` | 手动授予 Pro/Max/Ultra 或自定义套餐 |
 | POST | `/api/admin/users/{id}/revoke` | 撤销 Pro/Max |
 | GET | `/api/admin/applications?status=` | 晋升申请 |
 | POST | `/api/admin/applications/{id}/approve` | 通过 |
@@ -212,6 +223,8 @@ LINUX DO Connect 配置：
 | GET/POST | `/api/admin/prices` | 全局模型价格 |
 | PUT/DELETE | `/api/admin/prices/{model}` | 修改/删除价格 |
 | GET | `/api/admin/audit` | 审计日志 |
+| GET/POST | `/api/admin/plans` | 套餐列表 / 添加自定义套餐 |
+| PATCH/DELETE | `/api/admin/plans/{code}` | 改套餐描述（内置档仅可改描述）/ 删除自定义套餐 |
 
 ### OpenAI 兼容代理
 

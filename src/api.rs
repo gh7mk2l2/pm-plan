@@ -1,7 +1,7 @@
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppJson, AppResult};
 use crate::models::{PlanApplication, UsageLog, User};
-use crate::plans::{self, PlanInfo};
+use crate::plans::{self, PlanView};
 use crate::state::AppState;
 use crate::usage;
 use axum::extract::{Path, Query, State};
@@ -53,7 +53,7 @@ struct BootstrapResponse {
     app: AppInfo,
     registration_open: bool,
     has_users: bool,
-    plans: &'static [PlanInfo],
+    plans: Vec<PlanView>,
     oauth_login_url: &'static str,
 }
 
@@ -66,6 +66,7 @@ async fn bootstrap(State(state): State<AppState>) -> AppResult<Json<BootstrapRes
     let user_count: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
         .fetch_one(&state.pool)
         .await?;
+    let plans = plans::load_all_plans(&state.pool).await?;
     Ok(Json(BootstrapResponse {
         app: AppInfo {
             name: "PM-Plan",
@@ -77,7 +78,7 @@ async fn bootstrap(State(state): State<AppState>) -> AppResult<Json<BootstrapRes
         },
         registration_open,
         has_users: user_count > 0,
-        plans: &plans::PLANS,
+        plans,
         oauth_login_url: "/v1/oauth/login",
     }))
 }
@@ -94,8 +95,9 @@ async fn health(State(state): State<AppState>) -> AppResult<Json<Value>> {
     })))
 }
 
-async fn plans_handler() -> Json<Value> {
-    Json(json!({ "plans": plans::PLANS }))
+async fn plans_handler(State(state): State<AppState>) -> AppResult<Json<Value>> {
+    let plans = plans::load_all_plans(&state.pool).await?;
+    Ok(Json(json!({ "plans": plans })))
 }
 
 #[derive(Serialize)]
@@ -163,7 +165,7 @@ struct CheckinView {
 #[derive(Serialize)]
 struct MeResponse {
     user: MeUser,
-    plan: &'static PlanInfo,
+    plan: PlanView,
     usage: UsageView,
     checkin: CheckinView,
     pending_applications: Vec<PlanApplication>,
@@ -175,7 +177,7 @@ struct MeResponse {
 }
 
 async fn me(State(state): State<AppState>, AuthUser(user): AuthUser) -> AppResult<Json<MeResponse>> {
-    let plan_info = plans::plan(&user.plan);
+    let plan_info = plans::load_plan(&state.pool, &user.plan).await?;
     let quota = usage::quota_usage(&state.pool, user.id).await?;
     let available = usage::available_models(&state.pool, &user.plan).await?;
     let pending: Vec<PlanApplication> = sqlx::query_as(
@@ -673,10 +675,11 @@ async fn models_handler(
     .bind(&user.plan)
     .fetch_all(&state.pool)
     .await?;
+    let limits = plans::load_plan(&state.pool, &user.plan).await?.limits;
     Ok(Json(json!({
         "models": models,
         "plan": user.plan,
-        "limits": plans::plan(&user.plan).limits,
+        "limits": limits,
     })))
 }
 
@@ -696,9 +699,10 @@ struct SquareRow {
 /// tier -> 该档位可用的模型（按字节序排序）。规则与线上一致：
 /// 1) 模型自身有档位授权 → 用模型档位；2) 否则渠道有档位 → 用渠道档位；
 /// 3) 既不在 1) 也不在 2) 出现的模型 → 全部档位可用。
+/// 返回 (tier->模型, 合并后的档位顺序)：自定义套餐也作为 tier 出现。
 async fn model_tier_map(
     pool: &sqlx::PgPool,
-) -> Result<std::collections::BTreeMap<String, std::collections::BTreeSet<String>>, sqlx::Error> {
+) -> Result<(std::collections::BTreeMap<String, std::collections::BTreeSet<String>>, Vec<String>), sqlx::Error> {
     let explicit: Vec<(String, String)> = sqlx::query_as(
         "SELECT DISTINCT cm.model, t.tier \
          FROM channel_models cm \
@@ -725,18 +729,24 @@ async fn model_tier_map(
     )
     .fetch_all(pool)
     .await?;
-    Ok(build_tier_map(explicit, inherited, all))
+    let codes: Vec<String> = plans::load_all_plans(pool)
+        .await?
+        .into_iter()
+        .map(|p| p.code)
+        .collect();
+    Ok((build_tier_map(explicit, inherited, all, &codes), codes))
 }
 
 fn build_tier_map(
     explicit: Vec<(String, String)>,
     inherited: Vec<(String, String)>,
     all: Vec<String>,
+    codes: &[String],
 ) -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
     use std::collections::{BTreeMap, BTreeSet};
-    let mut map: BTreeMap<String, BTreeSet<String>> = plans::PLANS
+    let mut map: BTreeMap<String, BTreeSet<String>> = codes
         .iter()
-        .map(|p| (p.code.to_string(), BTreeSet::new()))
+        .map(|code| (code.clone(), BTreeSet::new()))
         .collect();
     let mut restricted: BTreeSet<String> = BTreeSet::new();
     for (model, tier) in explicit.into_iter().chain(inherited) {
@@ -754,7 +764,7 @@ fn build_tier_map(
 }
 
 async fn model_tiers_handler(State(state): State<AppState>) -> AppResult<Json<Value>> {
-    let map = model_tier_map(&state.pool).await?;
+    let (map, _codes) = model_tier_map(&state.pool).await?;
     Ok(Json(json!({ "tiers": map })))
 }
 
@@ -776,12 +786,13 @@ async fn model_square(
     .fetch_all(&state.pool)
     .await?;
     let map = model_tier_map(&state.pool).await?;
+    let (map, codes) = map;
     let models: Vec<Value> = rows
         .into_iter()
         .map(|row| {
-            let tiers: Vec<&str> = plans::PLANS
+            let tiers: Vec<&str> = codes
                 .iter()
-                .map(|p| p.code)
+                .map(|code| code.as_str())
                 .filter(|code| map.get(*code).map(|s| s.contains(&row.model)).unwrap_or(false))
                 .collect();
             let available_now = map
@@ -822,7 +833,8 @@ mod square_tests {
             ("m-chan".to_string(), "max".to_string()),
         ];
         let all = vec!["m-explicit".into(), "m-chan".into(), "m-open".into()];
-        let map = build_tier_map(explicit, inherited, all);
+        let codes: Vec<String> = plans::PLANS.iter().map(|p| p.code.to_string()).collect();
+        let map = build_tier_map(explicit, inherited, all, &codes);
         assert_eq!(map.len(), 8);
         assert!(map["pro"].contains("m-explicit"));
         assert!(!map["lite"].contains("m-explicit"));

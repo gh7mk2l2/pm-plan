@@ -4,7 +4,7 @@
   "use strict";
 
   const TIERS = ["lite", "essential", "standard", "pro", "max"];
-  const PLAN_ORDER = { lite: 0, essential: 1, standard: 2, pro: 3, max: 4 };
+  const PLAN_ORDER = { go: 0, lite: 1, essential: 2, standard: 3, plus: 4, pro: 5, max: 6, ultra: 7 };
   const app = document.getElementById("app");
   const toastRoot = document.getElementById("toast-root");
   const modalRoot = document.getElementById("modal-root");
@@ -24,6 +24,7 @@
     appStatus: "pending",
     selectedChannels: new Set(),
     channels: null,
+    adminPlans: null,
     theme: localStorage.getItem("pmplan-theme") || "dark",
   };
 
@@ -1376,6 +1377,7 @@
     "/admin/users": { admin: true, load: loadAdminUsers, render: renderAdminUsers, bind: bindAdminUsers },
     "/admin/channels": { admin: true, load: loadAdminChannels, render: renderAdminChannels, bind: bindAdminChannels },
     "/admin/applications": { admin: true, load: loadAdminApplications, render: renderAdminApplications, bind: bindAdminApplications },
+    "/admin/plans": { admin: true, load: loadAdminPlans, render: renderAdminPlans, bind: bindAdminPlans },
     "/admin/logs": { admin: true, load: loadAdminLogs, render: renderAdminLogs, bind: bindAdminLogs },
     "/admin/ip-bans": { admin: true, load: loadAdminIpBans, render: renderAdminIpBans, bind: bindAdminIpBans },
     "/admin/settings": { admin: true, load: loadAdminSettings, render: renderAdminSettings, bind: bindAdminSettings },
@@ -1482,6 +1484,7 @@
       ["/admin/users", "用户", "users"],
       ["/admin/channels", "渠道", "server"],
       ["/admin/applications", "审批", "crown"],
+      ["/admin/plans", "套餐", "layers"],
       ["/admin/logs", "日志", "chart"],
       ["/admin/ip-bans", "IP 封禁", "shield"],
       ["/admin/settings", "设置", "settings"],
@@ -1586,11 +1589,13 @@
   /* ---------- admin users ---------- */
 
   async function loadAdminUsers() {
-    const [me, data] = await Promise.all([
+    const [me, data, plansData] = await Promise.all([
       api("/api/me"),
       api(`/api/admin/users?q=${encodeURIComponent(ui.userQuery)}&page=${ui.userPage}`),
+      api("/api/admin/plans"),
     ]);
     state.me = me;
+    ui.adminPlans = plansData.plans || [];
     return { me, data };
   }
 
@@ -1599,7 +1604,7 @@
     const totalPages = Math.max(1, data.pages || 1);
     return `
       ${adminTabs("/admin/users")}
-      ${adminHeader("用户管理", "封禁 / 解封、手动授予或撤销 Pro / Max、查看用户用量")}
+      ${adminHeader("用户管理", "封禁 / 解封、手动授予或撤销套餐、查看用户用量")}
       <div class="card">
         <form class="filters" id="user-search-form">
           <div class="search-input">${icon("search", 14)}<input class="input" name="q" value="${esc(ui.userQuery)}" placeholder="搜索用户名或昵称…"></div>
@@ -1654,13 +1659,17 @@
     buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="issue-makeup-one" data-id="${user.id}">发补签卡</button>`);
     buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="issue-makeup-one-plus" data-id="${user.id}">发 Plus 卡</button>`);
     buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="issue-reset-one" data-id="${user.id}">发重置卡</button>`);
-    if (PLAN_ORDER[user.plan] < 3) {
+    // 自定义套餐不在 PLAN_ORDER 里，视为最高档：不显示快捷授予按钮，
+    // 改走“授予套餐”弹窗（下拉含全部套餐，后端校验只能授予更高档位）。
+    const order = PLAN_ORDER[user.plan] ?? 99;
+    buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="grant-plan-modal" data-id="${user.id}">授予套餐</button>`);
+    if (order < 5) {
       buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="grant-plan" data-id="${user.id}" data-plan="pro">授予 Pro</button>`);
     }
-    if (PLAN_ORDER[user.plan] < 4) {
+    if (order < 6) {
       buttons.push(`<button type="button" class="btn btn-soft btn-sm" data-action="grant-plan" data-id="${user.id}" data-plan="max">授予 Max</button>`);
     }
-    if (PLAN_ORDER[user.plan] >= 3) {
+    if (order >= 5) {
       buttons.push(`<button type="button" class="btn btn-ghost btn-sm" data-action="revoke-plan" data-id="${user.id}">撤销</button>`);
     }
     return buttons.join("");
@@ -1673,6 +1682,81 @@
       ui.userQuery = new FormData(form).get("q")?.toString() || "";
       ui.userPage = 1;
       render();
+    });
+  }
+
+  /* ---------- admin plans ---------- */
+
+  async function loadAdminPlans() {
+    const [me, data] = await Promise.all([api("/api/me"), api("/api/admin/plans")]);
+    state.me = me;
+    ui.adminPlans = data.plans || [];
+    return { me, plans: ui.adminPlans };
+  }
+
+  function planLimitsText(plan) {
+    return `5H ${money(plan.limits.h5)} · 7D ${money(plan.limits.weekly)} · 30D ${money(plan.limits.monthly)}`;
+  }
+
+  function renderAdminPlans({ plans }) {
+    return `
+      ${adminTabs("/admin/plans")}
+      ${adminHeader("套餐管理", "添加自定义套餐、改描述、删除套餐；内置档仅可改描述")}
+      <div class="card">
+        <div class="card-head"><div><div class="card-title">添加自定义套餐</div><div class="card-sub">自定义套餐只能由管理员手动授予，不参与签到自动升级；额度为空 = 不限</div></div></div>
+        <form id="plan-add-form" class="filters" style="margin-bottom:4px">
+          <input class="input" name="code" placeholder="code，如 vip2026" required style="width:130px">
+          <input class="input" name="name" placeholder="名称，如 VIP" required style="width:120px">
+          <input class="input" name="tagline" placeholder="描述（显示给用户看）" required style="min-width:200px">
+          <input class="input" name="h5_usd" type="number" step="0.01" min="0" placeholder="5H $（空=不限）" style="width:120px">
+          <input class="input" name="weekly_usd" type="number" step="0.01" min="0" placeholder="7D $（空=不限）" style="width:120px">
+          <input class="input" name="monthly_usd" type="number" step="0.01" min="0" placeholder="30D $（空=不限）" style="width:130px">
+          <input class="input" name="sort_order" type="number" step="1" placeholder="排序（默认 0）" style="width:110px">
+          <label class="switch"><input type="checkbox" name="requires_approval"><span class="switch-track"></span><span class="switch-text">需审批</span></label>
+          <button class="btn btn-soft btn-sm" type="submit">${icon("plus", 13)}添加套餐</button>
+        </form>
+        <p class="field-hint">code 只能是小写字母开头的小写字母 / 数字 / 下划线（2–32 字符），不可与内置档重名。新建套餐默认没有任何渠道授权——记得去“渠道”页把档位勾上，否则用户看不到任何模型。</p>
+      </div>
+      <div class="card mt-24">
+        <div class="card-head"><div><div class="card-title">全部套餐</div><div class="card-sub">内置档在前，自定义套餐按排序值排在后面</div></div><span class="badge badge-muted">${plans.length} 个</span></div>
+        <div class="mini-list">${plans
+          .map(
+            (plan) => `<div class="mini-row"><div class="mini-row-main">${planBadge(plan.code, plan.name)}<strong>${esc(plan.name)}</strong><span>${esc(plan.tagline)}${plan.requires_approval ? " · 需站长审批" : ""}</span><span class="faint" style="font-size:11px">${planLimitsText(plan)}${plan.checkin_days ? ` · 连续签到 ${plan.checkin_days} 天` : ""}</span></div>
+          <span class="mini-row-side" style="display:inline-flex;align-items:center;gap:8px"><span class="badge ${plan.builtin ? "badge-muted" : "badge-success"}">${plan.builtin ? "内置" : "自定义"}</span><button type="button" class="btn btn-ghost btn-sm" data-action="edit-plan" data-code="${esc(plan.code)}" data-builtin="${plan.builtin ? "1" : "0"}">改描述</button>${plan.builtin ? "" : `<button type="button" class="btn btn-ghost btn-sm" data-action="delete-plan" data-code="${esc(plan.code)}" data-name="${esc(plan.name)}">${icon("trash", 13)}</button>`}</span></div>`
+          )
+          .join("")}</div>
+        <p class="field-hint">删除保护：内置套餐不可删除；有人持有、被渠道或模型档位授权引用、或有待审批申请的自定义套餐也删不掉（先改派用户、取消授权、处理申请）。</p>
+      </div>`;
+  }
+
+  function bindAdminPlans() {
+    const form = document.querySelector("#plan-add-form");
+    form?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const usd = (key) => {
+        const value = String(data.get(key) || "").trim();
+        return value === "" ? null : Number(value);
+      };
+      try {
+        await api("/api/admin/plans", {
+          method: "POST",
+          body: {
+            code: String(data.get("code") || "").trim(),
+            name: String(data.get("name") || "").trim(),
+            tagline: String(data.get("tagline") || "").trim(),
+            h5_usd: usd("h5_usd"),
+            weekly_usd: usd("weekly_usd"),
+            monthly_usd: usd("monthly_usd"),
+            sort_order: Math.round(Number(data.get("sort_order") || 0)),
+            requires_approval: data.get("requires_approval") === "on",
+          },
+        });
+        toast("套餐已添加", "success");
+        render();
+      } catch (error) {
+        toast(error.message, "error");
+      }
     });
   }
 
@@ -2415,6 +2499,9 @@
     "user.unban": "解封用户",
     "user.grant": "手动授予档位",
     "user.revoke": "撤销 Pro / Max",
+    "plan.create": "添加套餐",
+    "plan.update": "修改套餐",
+    "plan.delete": "删除套餐",
     "application.approve": "通过晋升申请",
     "application.reject": "驳回晋升申请",
     "channel.create": "添加渠道",
@@ -2798,6 +2885,88 @@
         }
       });
       obs.observe(modalRoot, { childList: true });
+    });
+  }
+
+  function openEditPlanModal(code, builtin) {
+    const plan = (ui.adminPlans || []).find((item) => item.code === code);
+    const isCustom = !builtin;
+    openModal({
+      title: `改描述 · ${plan ? plan.name : code}`,
+      subtitle: builtin ? "内置套餐仅可修改描述，档位与额度不可改" : "自定义套餐可改描述、名称、额度与排序",
+      body: `
+        <div class="field"><label>描述（显示给用户看）</label><input class="input" id="edit-plan-tagline" maxlength="200" value="${esc(plan?.tagline || "")}"></div>
+        ${isCustom ? `
+        <div class="field"><label>名称</label><input class="input" id="edit-plan-name" maxlength="50" value="${esc(plan?.name || "")}"></div>
+        <div class="field"><label>5H 额度（美元，留空 = 不限）</label><input class="input" id="edit-plan-h5" type="number" step="0.01" min="0" value="${plan?.limits.h5 == null ? "" : plan.limits.h5 / 1e6}"></div>
+        <div class="field"><label>7D 额度（美元，留空 = 不限）</label><input class="input" id="edit-plan-weekly" type="number" step="0.01" min="0" value="${plan?.limits.weekly == null ? "" : plan.limits.weekly / 1e6}"></div>
+        <div class="field"><label>30D 额度（美元，留空 = 不限）</label><input class="input" id="edit-plan-monthly" type="number" step="0.01" min="0" value="${plan?.limits.monthly == null ? "" : plan.limits.monthly / 1e6}"></div>
+        <div class="field"><label>排序</label><input class="input" id="edit-plan-sort" type="number" step="1" value="${plan?.sort_order ?? 0}"></div>` : ""}`,
+      footer: `<button type="button" class="btn btn-ghost" data-action="close-modal">取消</button><button type="button" class="btn btn-primary" id="save-plan-edit">保存</button>`,
+      onMount(root) {
+        root.querySelector("#save-plan-edit").addEventListener("click", async (event) => {
+          const button = event.currentTarget;
+          button.disabled = true;
+          try {
+            const tagline = root.querySelector("#edit-plan-tagline").value.trim();
+            if (!tagline) throw new Error("描述不能为空");
+            const body = { tagline };
+            if (isCustom) {
+              const name = root.querySelector("#edit-plan-name").value.trim();
+              if (!name) throw new Error("名称不能为空");
+              body.name = name;
+              const usd = (id) => {
+                const value = root.querySelector(id).value.trim();
+                return value === "" ? null : Number(value);
+              };
+              body.h5_usd = usd("#edit-plan-h5");
+              body.weekly_usd = usd("#edit-plan-weekly");
+              body.monthly_usd = usd("#edit-plan-monthly");
+              body.sort_order = Math.round(Number(root.querySelector("#edit-plan-sort").value || 0));
+            }
+            await api(`/api/admin/plans/${encodeURIComponent(code)}`, { method: "PATCH", body });
+            closeModal();
+            toast("套餐已更新", "success");
+            await render();
+          } catch (error) {
+            button.disabled = false;
+            toast(error.message, "error");
+          }
+        });
+      },
+    });
+  }
+
+  function openGrantPlanModal(userId) {
+    const plans = ui.adminPlans || [];
+    if (!plans.length) {
+      toast("套餐列表尚未加载，请刷新页面重试", "error");
+      return;
+    }
+    openModal({
+      title: "手动授予套餐",
+      subtitle: "选择要授予的套餐；只能授予比用户当前档位更高的套餐，后端会校验。",
+      body: `<div class="field"><label>授予套餐</label><select class="input" id="grant-plan-select">${plans
+        .map((plan) => `<option value="${esc(plan.code)}">${esc(plan.name)}（${esc(plan.code)}）${plan.builtin ? "" : " · 自定义"}</option>`)
+        .join("")}</select></div>
+      <p class="field-hint">自定义套餐只能这样手动授予，不参与签到自动升级。</p>`,
+      footer: `<button type="button" class="btn btn-ghost" data-action="close-modal">取消</button><button type="button" class="btn btn-primary" id="confirm-grant-plan">确认授予</button>`,
+      onMount(root) {
+        root.querySelector("#confirm-grant-plan").addEventListener("click", async (event) => {
+          const button = event.currentTarget;
+          button.disabled = true;
+          try {
+            const plan = root.querySelector("#grant-plan-select").value;
+            await api(`/api/admin/users/${userId}/grant`, { method: "POST", body: { plan } });
+            closeModal();
+            toast(`已授予 ${plan.toUpperCase()}`, "success");
+            await render();
+          } catch (error) {
+            button.disabled = false;
+            toast(error.message, "error");
+          }
+        });
+      },
     });
   }
 
@@ -3344,6 +3513,27 @@
           await render();
           break;
         }
+        case "edit-plan":
+          openEditPlanModal(target.dataset.code, target.dataset.builtin === "1");
+          break;
+        case "delete-plan": {
+          const code = target.dataset.code;
+          confirmModal({
+            title: `删除套餐 ${target.dataset.name || code}`,
+            message: "删除后该套餐彻底消失。内置套餐、有人持有、被渠道或模型授权引用、有待审批申请的套餐会被后端拒绝删除。",
+            confirmText: "确认删除",
+            danger: true,
+            async onConfirm() {
+              await api(`/api/admin/plans/${encodeURIComponent(code)}`, { method: "DELETE" });
+              toast("套餐已删除", "success");
+              await render();
+            },
+          });
+          break;
+        }
+        case "grant-plan-modal":
+          openGrantPlanModal(Number(target.dataset.id));
+          break;
         case "grant-plan": {
           const id = Number(target.dataset.id);
           const plan = target.dataset.plan;
